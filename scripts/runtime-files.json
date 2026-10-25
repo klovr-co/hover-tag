@@ -85,7 +85,6 @@
     "scripts/tag_approval_choices.py",
     "scripts/tag_autostart.py",
     "scripts/tag_chatgpt.py",
-    "scripts/tag_connector_backends.py",
     "scripts/tag_connectors.py",
     "scripts/tag_cli.py",
     "scripts/tag_config.py",

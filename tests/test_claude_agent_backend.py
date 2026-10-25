@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from scripts import agent_permissions, claude_agent_backend
+from scripts import agent_permissions, claude_agent_backend, tag_connectors
 from scripts.claude_agent_backend import (
     APPROVAL_LABEL_COMMAND,
     APPROVAL_LABEL_TOOL,
@@ -418,6 +418,17 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual("/bin/claude", options.cli_path)
         self.assertTrue(options.include_partial_messages)
         self.assertTrue(FakeClient.instances[0].disconnected)
+
+    def test_passes_the_connectors_the_tag_may_use(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        servers = {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp"}}
+        with patch.object(tag_connectors, "claude_mcp_servers", return_value=servers) as found:
+            (status, _), _events = self.run_agent(script)
+        found.assert_called_once_with(self.root)
+        self.assertEqual("completed", status)
+        self.assertEqual(servers, FakeClient.instances[0].options.mcp_servers)
 
     def test_tag_thinking_level_reaches_the_sdk_effort_option(self) -> None:
         from scripts import agent_models, slack_socket_agent

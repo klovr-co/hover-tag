@@ -22,7 +22,7 @@ from typing import Any
 
 try:
     from .opentag_process_env import text_only_environment
-    from . import agent_connection, agent_permissions, agent_usage
+    from . import agent_connection, agent_permissions, agent_usage, tag_connectors
     from .agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -38,7 +38,7 @@ try:
     from .tag_memory import CLAUDE_NATIVE_MEMORY_ENV
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import text_only_environment
-    import agent_connection, agent_permissions, agent_usage
+    import agent_connection, agent_permissions, agent_usage, tag_connectors
     from agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -556,12 +556,6 @@ def approval_choices(suggestions: Any, tool_name: str = "", tool_input: dict[str
 
 
 
-def workspace_mcp_config(workdir: Path) -> Path | None:
-    """Layer only the workspace's Tag-owned MCP servers, like Codex's config."""
-    config = workdir / ".mcp.json"
-    return config if config.is_file() else None
-
-
 def normalize_catalog(models: Any) -> list[dict[str, Any]]:
     """Convert the CLI's initialize model list into Tag's catalog fields."""
     catalog: list[dict[str, Any]] = []
@@ -703,9 +697,13 @@ class ClaudeAgentRun:
         cli_path = claude_cli_path()
         if cli_path:
             kwargs["cli_path"] = cli_path
-        mcp_config = workspace_mcp_config(self.cwd)
-        if mcp_config is not None:
-            kwargs["mcp_servers"] = mcp_config
+        # The workspace's servers plus the shared connectors this Tag may use (ADR 0014).
+        try:
+            mcp_servers = tag_connectors.claude_mcp_servers(self.cwd)
+        except ValueError as exc:
+            raise ClaudeAgentError(str(exc)) from None
+        if mcp_servers is not None:
+            kwargs["mcp_servers"] = mcp_servers
         if model and model != "default":
             kwargs["model"] = model
         if reasoning_effort:

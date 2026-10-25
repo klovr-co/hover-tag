@@ -5,6 +5,8 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -17,13 +19,7 @@ class ConnectorStoreTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        # No backend CLIs on PATH and temp configs, so the real ~/.claude* and ~/.codex stay untouched.
-        for name in ("bin", "home", "claude", "codex"):
-            (self.root / name).mkdir()
-        env = patch.dict(os.environ, {"TAG_HOME": str(self.root), "PATH": str(self.root / "bin"),
-                                      "HOME": str(self.root / "home"),
-                                      "CLAUDE_CONFIG_DIR": str(self.root / "claude"),
-                                      "CODEX_HOME": str(self.root / "codex")})
+        env = patch.dict(os.environ, {"TAG_HOME": str(self.root)})
         env.start()
         self.addCleanup(env.stop)
         self.store = connectors.Store(self.root)
@@ -36,8 +32,6 @@ class ConnectorStoreTests(unittest.TestCase):
 
     def test_new_connector_is_allowed_for_no_tag(self):
         row = self.run_cli("add", "linear", "--url", "https://mcp.linear.app/mcp")["connector"]
-        self.assertEqual({backend: found["state"] for backend, found in row.pop("backends").items()},
-                         {"claude": "pending", "codex": "pending"})
         self.assertEqual(row, {"name": "linear", "transport": "http", "url": "https://mcp.linear.app/mcp",
                                "allowed_tags": [], "added_at": row["added_at"]})
         self.assertEqual(self.store.allowed_for("default"), set())
@@ -116,6 +110,95 @@ class ConnectorStoreTests(unittest.TestCase):
         with patch("sys.argv", ["tag", "sales", "connector", "list"]), \
                 patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
             tag_cli._run_cli()
+
+
+
+# Found before any test narrows PATH; only ever run with a temp CODEX_HOME.
+CODEX = shutil.which("codex")
+REAL_PATH = os.environ.get("PATH", "")
+
+
+class ConnectorRunTests(unittest.TestCase):
+    """Each run is given only the connectors its Tag may use (ADR 0014)."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        base = Path(self.temp.name)
+        self.root, self.codex_home, self.workdir = base / "tag", base / "codex", base / "workspace"
+        for path in (self.root, self.codex_home, self.workdir, base / "claude", base / "bin"):
+            path.mkdir()
+        # No backend CLIs on PATH and temp configs: these tests must never reach the user's own.
+        env = patch.dict(os.environ, {"TAG_HOME": str(self.root), "TAG_ID": "sales", "HOME": str(base),
+                                      "CODEX_HOME": str(self.codex_home), "CLAUDE_CONFIG_DIR": str(base / "claude"),
+                                      "PATH": str(base / "bin")})
+        env.start()
+        self.addCleanup(env.stop)
+        tag_instances.create(self.root, "sales")
+        self.store = connectors.Store(self.root)
+        self.store.add("linear", url="https://mcp.linear.app/mcp")
+        self.store.add("gmail", url="https://gmail.example/mcp")
+        self.store.add("notes", command=["notes-mcp", "--read-only"], env=["NOTES_KEY"])
+        self.store.set_allowed("linear", ["sales"], True)
+        self.store.set_allowed("notes", ["sales"], True)
+
+    def test_codex_gets_only_allowed_connectors_with_env_names(self):
+        self.assertEqual(connectors.codex_run_args(self.workdir), [
+            "-c", 'mcp_servers.linear={"url" = "https://mcp.linear.app/mcp"}',
+            "-c", 'mcp_servers.notes={"command" = "notes-mcp", "args" = ["--read-only"], '
+                  '"env_vars" = ["NOTES_KEY"]}'])
+
+    def test_claude_gets_allowed_connectors_and_the_workspace_wins(self):
+        self.assertEqual(connectors.claude_mcp_servers(self.workdir), {
+            "linear": {"type": "http", "url": "https://mcp.linear.app/mcp"},
+            "notes": {"type": "stdio", "command": "notes-mcp", "args": ["--read-only"],
+                      "env": {"NOTES_KEY": "${NOTES_KEY}"}}})
+        mine = {"command": "my-linear"}
+        (self.workdir / ".mcp.json").write_text(json.dumps({"mcpServers": {"linear": mine}}))
+        self.assertEqual(connectors.claude_mcp_servers(self.workdir)["linear"], mine)
+        (self.workdir / ".codex").mkdir()
+        (self.workdir / ".codex/config.toml").write_text('[mcp_servers.linear]\ncommand = "my-linear"\n')
+        self.assertEqual([argument.split("=")[0] for argument in connectors.codex_run_args(self.workdir)],
+                         ["-c", "mcp_servers.notes"])
+
+    def test_without_connectors_the_workspace_config_passes_as_before(self):
+        self.store.forget_tag("sales")
+        self.assertIsNone(connectors.claude_mcp_servers(self.workdir))
+        (self.workdir / ".mcp.json").write_text('{"mcpServers": {}}')
+        self.assertEqual(connectors.claude_mcp_servers(self.workdir), self.workdir / ".mcp.json")
+        self.assertEqual(connectors.codex_run_args(self.workdir), [])
+
+    def test_nothing_outside_a_tag_run_and_bad_files_fail(self):
+        with patch.dict(os.environ, {"TAG_ID": ""}):
+            self.assertEqual(connectors.codex_run_args(self.workdir), [])
+            self.assertIsNone(connectors.claude_mcp_servers(self.workdir))
+        (self.workdir / ".mcp.json").write_text("{")
+        with self.assertRaisesRegex(connectors.ConnectorError, "Couldn't read"):
+            connectors.claude_mcp_servers(self.workdir)
+        connectors.store_path(self.root).write_text("{")
+        with self.assertRaisesRegex(connectors.ConnectorError, "Cannot read the connector list"):
+            connectors.codex_run_args(self.workdir)
+
+    def test_codex_workspace_args_add_connectors_in_any_folder(self):
+        from scripts import tag_paths
+        self.assertEqual(tag_paths.codex_workspace_args(self.workdir), connectors.codex_run_args(self.workdir))
+
+    def test_rename_moves_access_and_remove_forgets_it(self):
+        self.store.rename_tag("sales", "acme-sales")
+        self.assertEqual(self.store.allowed_for("acme-sales"), {"linear", "notes"})
+        self.assertEqual(self.store.allowed_for("sales"), set())
+        self.store.forget_tag("acme-sales")
+        self.assertEqual(self.store.allowed_for("acme-sales"), set())
+
+    @unittest.skipUnless(CODEX, "codex CLI not installed")
+    def test_real_codex_accepts_the_definitions(self):
+        listed = subprocess.run([CODEX, "mcp", "list", "--json", *connectors.codex_run_args(self.workdir)],
+                                capture_output=True, text=True, timeout=60, check=True,
+                                env={**os.environ, "PATH": REAL_PATH})
+        rows = {row["name"]: row for row in json.loads(listed.stdout)}
+        self.assertEqual(set(rows), {"linear", "notes"})
+        self.assertEqual(rows["linear"]["transport"]["url"], "https://mcp.linear.app/mcp")
+        self.assertEqual(rows["notes"]["transport"]["env_vars"], ["NOTES_KEY"])
 
 
 if __name__ == "__main__":
