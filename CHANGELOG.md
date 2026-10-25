@@ -6,6 +6,15 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Each Tag's memory is now plain markdown files with a full history. What
+  someone asked a Tag to remember lives in `memory/core.md` (always loaded),
+  `memory/notes/` and `memory/channels/<channel>/`. Every change is recorded
+  with who asked and the Slack thread it came from, in a private history
+  outside the Tag's folder, and the old limit of 10 values per entry is gone.
+  Forgotten entries stay restorable by the Tag's owner unless someone asks to
+  forget them completely (`--drop-old`). Existing memory moves over on the
+  first start; what each request sees stays exactly the same, and the old
+  files stay as a backup.
 - Choose what each Tag may do without asking, with each agent's own
   settings. In the Tag's **Details**, **Permissions** shows Codex's sandbox
   (Read only, Workspace write, Full access), approval policy (Default,
