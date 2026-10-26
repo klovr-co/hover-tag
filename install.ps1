@@ -12,7 +12,7 @@ param(
     [string]$BinDir,
     [switch]$SkipDependencies,
     [switch]$DependenciesOnly,
-    # Skip the 560 MB built-in search-model download (you will use a custom search model).
+    # Accepted for older callers: Tag no longer downloads a search model.
     [switch]$SkipMemoryModel,
     # Print the prepared Python and uv paths, one per line, and exit.
     [switch]$RuntimeInfo
@@ -128,30 +128,20 @@ if ($RuntimeInfo) {
     exit 0
 }
 if ($DependenciesOnly) {
-    # Set only for this run, so it doesn't leak into the caller's PowerShell session.
-    $previousSkip = $env:TAG_SKIP_MFS_MODEL
-    if ($SkipMemoryModel) { $env:TAG_SKIP_MFS_MODEL = '1' }
-    try {
-        if (-not $PSScriptRoot -or -not (Test-Path (Join-Path $PSScriptRoot 'requirements-runtime.txt'))) {
-            throw '-DependenciesOnly is available only from a Tag source checkout.'
-        }
-        $venv = Join-Path $PSScriptRoot '.venv'
-        $runtimePython = Join-Path $venv 'Scripts/python.exe'
-        if (-not (Test-Path $runtimePython)) {
-            Write-Host 'Creating Tag runtime...'
-            Invoke-Native { & $uv venv --python $python $venv }
-            if ($LASTEXITCODE -ne 0) { throw "Tag runtime creation failed ($LASTEXITCODE)" }
-        }
-        Write-Host 'Installing pinned Tag runtime dependencies...'
-        Invoke-Native { & $uv pip install --python $runtimePython -r (Join-Path $PSScriptRoot 'requirements-runtime.txt') }
-        if ($LASTEXITCODE -ne 0) { throw "Tag dependency installation failed ($LASTEXITCODE)" }
-        Write-Host 'Preparing the local MFS embedding model...'
-        Invoke-Native { & $runtimePython (Join-Path $PSScriptRoot 'scripts/preload_mfs_model.py') }
-        if ($LASTEXITCODE -ne 0) { throw "MFS embedding model preparation failed ($LASTEXITCODE)" }
-        Write-Host 'Pinned Tag dependencies are installed.'
-    } finally {
-        $env:TAG_SKIP_MFS_MODEL = $previousSkip
+    if (-not $PSScriptRoot -or -not (Test-Path (Join-Path $PSScriptRoot 'requirements-runtime.txt'))) {
+        throw '-DependenciesOnly is available only from a Tag source checkout.'
     }
+    $venv = Join-Path $PSScriptRoot '.venv'
+    $runtimePython = Join-Path $venv 'Scripts/python.exe'
+    if (-not (Test-Path $runtimePython)) {
+        Write-Host 'Creating Tag runtime...'
+        Invoke-Native { & $uv venv --python $python $venv }
+        if ($LASTEXITCODE -ne 0) { throw "Tag runtime creation failed ($LASTEXITCODE)" }
+    }
+    Write-Host 'Installing pinned Tag runtime dependencies...'
+    Invoke-Native { & $uv pip install --python $runtimePython -r (Join-Path $PSScriptRoot 'requirements-runtime.txt') }
+    if ($LASTEXITCODE -ne 0) { throw "Tag dependency installation failed ($LASTEXITCODE)" }
+    Write-Host 'Pinned Tag dependencies are installed.'
     exit 0
 }
 $installerArgs = @()
@@ -159,7 +149,6 @@ if ($Version) { $installerArgs += @('--version', $Version) }
 if ($Channel) { $installerArgs += @('--channel', $Channel) }
 if ($BinDir) { $installerArgs += @('--bin-dir', $BinDir) }
 if ($SkipDependencies) { $installerArgs += '--skip-dependencies' }
-if ($SkipMemoryModel) { $installerArgs += '--skip-memory-model' }
 if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'scripts/tag_install.py'))) {
     if (-not $Version -and -not $Channel) { $installerArgs += @('--source', $PSScriptRoot) }
     # The installer writes progress to stderr; never let PowerShell treat that as failure.

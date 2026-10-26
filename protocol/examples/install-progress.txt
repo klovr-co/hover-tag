@@ -3,6 +3,5 @@
 @tag-progress {"schema_version": 1, "step": "download"}
 @tag-progress {"schema_version": 1, "step": "release", "version": "0.2.0"}
 @tag-progress {"schema_version": 1, "step": "components"}
-@tag-progress {"schema_version": 1, "step": "memory"}
 @tag-progress {"schema_version": 1, "step": "command"}
 @tag-progress {"schema_version": 1, "step": "done", "version": "0.2.0", "command": "/Users/maya/.local/bin/tag"}

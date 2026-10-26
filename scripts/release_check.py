@@ -88,7 +88,7 @@ def validate_release(root: Path) -> list[str]:
     release = _read(root, "RELEASE.md", errors)
     contract_version = _release_contract_version(version)
     for token in (
-        "Slack + Codex CLI + a local MFS server",
+        "Slack + Codex CLI, searching Slack live",
         f"v{contract_version}" if contract_version else "## v",
         "Stable releases remain explicit owner actions",
     ):

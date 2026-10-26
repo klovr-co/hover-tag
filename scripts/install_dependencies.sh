@@ -5,8 +5,6 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-MFS_SERVER_SPEC=$(awk '/^mfs-server(\[[^]]+\])?==/ { print; exit }' "$ROOT/requirements-runtime.txt")
-MFS_VERSION=${MFS_SERVER_SPEC##*==}
 RUNTIME_PYTHON="$ROOT/.venv/bin/python"
 RUNTIME_BIN="$ROOT/.venv/bin"
 PATH="$RUNTIME_BIN:$PATH"
@@ -21,32 +19,14 @@ fail() {
     exit 1
 }
 
-[ -n "$MFS_SERVER_SPEC" ] || fail "requirements-runtime.txt does not pin mfs-server."
-
 require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 is required. $2"
-}
-
-mfs_server_has_version() {
-    "$RUNTIME_PYTHON" -c 'import importlib.metadata, sys; sys.exit(importlib.metadata.version("mfs-server") != sys.argv[1])' "$MFS_VERSION" 2>/dev/null
 }
 
 check_install() {
     check_mode=${1:-full}
     failed=0
-    for command in mfs-server; do
-        if command -v "$command" >/dev/null 2>&1; then
-            say "✓ $command"
-        else
-            say "✗ $command"
-            failed=1
-        fi
-    done
-    if command -v mfs-server >/dev/null 2>&1 && ! mfs_server_has_version; then
-        say "✗ mfs-server must be v$MFS_VERSION"
-        failed=1
-    fi
-    if [ -x "$RUNTIME_PYTHON" ] && "$RUNTIME_PYTHON" -c 'import mfs_server, psutil, slack_bolt' >/dev/null 2>&1; then
+    if [ -x "$RUNTIME_PYTHON" ] && "$RUNTIME_PYTHON" -c 'import dulwich, psutil, slack_bolt' >/dev/null 2>&1; then
         say "✓ Tag runtime"
     else
         say "✗ Tag runtime (run ./install.sh --dependencies-only)"
@@ -83,7 +63,7 @@ if [ -z "${TAG_BOOTSTRAP_PYTHON:-}" ] || [ -z "${TAG_BOOTSTRAP_UV:-}" ]; then
 fi
 require_command curl "Install curl and run this command again."
 # Prepare in an immutable directory. The source launcher only sees it after
-# packages, model, and imports pass, just like a managed release activation.
+# packages and imports pass, just like a managed release activation.
 mkdir -p "$ROOT/.runtime"
 prepared_runtime=$(mktemp -d "$ROOT/.runtime/python.XXXXXX")
 RUNTIME_PYTHON="$prepared_runtime/bin/python"
@@ -94,9 +74,6 @@ say "Creating Tag runtime..."
 "$TAG_BOOTSTRAP_UV" venv --python "$TAG_BOOTSTRAP_PYTHON" "$prepared_runtime"
 say "Installing pinned Tag runtime dependencies..."
 "$TAG_BOOTSTRAP_UV" pip install --python "$RUNTIME_PYTHON" -r "$ROOT/requirements-runtime.txt"
-
-say "Preparing the local MFS embedding model..."
-"$RUNTIME_PYTHON" "$ROOT/scripts/preload_mfs_model.py"
 
 check_install dependencies
 "$RUNTIME_PYTHON" - "$ROOT" "$prepared_runtime" <<'PYTHON'
@@ -136,4 +113,4 @@ say ""
 say "Installation complete. Next run:"
 say "  ./tag start"
 say ""
-say "Tag will start MFS, run all preflight checks, and then start the configured bot."
+say "Tag will run all preflight checks, and then start the configured bot."
