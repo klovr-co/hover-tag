@@ -406,6 +406,8 @@ function SignIn({ api, question, state, setStep, send }: {
   const [code, setCode] = useState("");
   const step = state.signInStep;
   const line = question.sign_in_line ?? "";
+  const checking = state.checkingCode;
+  const connect = () => { if (code.trim() && !checking) send(code.trim()); };
   const items = [
     { title: "Copy your sign-in line", detail: "A one-time line that tells Slack this computer is yours.",
       act: <div className="ticket"><span className="mono">{line}</span>
@@ -420,9 +422,10 @@ function SignIn({ api, question, state, setStep, send }: {
     { title: "Paste the code from Slack", detail: "After you confirm, Slack shows a short code.",
       act: <><div className="field-wrap">
         <input className="field code" placeholder="Code from Slack" value={code} autoFocus aria-label="Code from Slack" autoComplete="off" spellCheck={false}
-          onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && code.trim()) send(code.trim()); }} />
-        <button className="p-btn soft sm in-btn" onClick={() => void api.paste().then((t) => setCode(t.trim()))}><Icon name="paste" />Paste</button>
-      </div><div className="cb"><Primary small title="Connect" disabled={!code.trim()} onClick={() => send(code.trim())} /></div></> },
+          readOnly={checking} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") connect(); }} />
+        <button className="p-btn soft sm in-btn" disabled={checking} onClick={() => void api.paste().then((t) => setCode(t.trim()))}><Icon name="paste" />Paste</button>
+      </div><div className="cb"><Primary small title={checking ? <><span className="spin sm" />Checking…</> : "Connect"}
+        disabled={!code.trim() || checking} onClick={connect} /></div></> },
   ];
   return (
     <FlowBody title={state.addingWorkspace ? "Sign in to another workspace" : `Sign in so ${state.profile?.name || "your Tag"} can join Slack`}

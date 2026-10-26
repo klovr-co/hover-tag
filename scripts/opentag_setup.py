@@ -2127,8 +2127,31 @@ def main() -> int:
     except (OSError, ValueError, RuntimeError) as exc:
         if telemetry_session:
             telemetry_session.abandon()
+        log_setup_failure(config_path)
         print(f"Setup could not continue: {exc}", file=sys.stderr)
         return 1
+    except Exception:
+        log_setup_failure(config_path)
+        raise
+
+
+def log_setup_failure(config_path: Path) -> None:
+    """Keep why setup stopped: Tag.app shows only its last words, and only until it closes.
+
+    ``state/setup.log`` is listed by tag logs and moves with an abandoned Tag.
+    Tracebacks carry no answers; Slack CLI output is never part of them.
+    """
+    import traceback
+    from datetime import datetime, timezone
+    try:
+        state = config_path.parent.parent / "state"
+        state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(state / "setup.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(descriptor, "a", encoding="utf-8") as log:
+            log.write(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} Setup stopped\n")
+            log.write(traceback.format_exc())
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

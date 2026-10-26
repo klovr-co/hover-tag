@@ -36,11 +36,14 @@ export interface SetupState {
   addingWorkspace: boolean;
   /** The setup process has exited and released its locks. */
   ended: boolean;
+  /** A Slack sign-in code was sent and Slack hasn't answered yet: send it only once. */
+  checkingCode: boolean;
 }
 
 export const initialSetup: SetupState = {
   question: null, lastQuestion: null, signInStep: 0, status: "Preparing setup…", outcome: null, error: "", tag: "", signIn: idleSignIn,
   creating: null, ready: null, existing: false, workspaces: null, profile: null, addingWorkspace: false, ended: false,
+  checkingCode: false,
 };
 
 export type SetupAction =
@@ -90,7 +93,7 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
         const workspaces = question.id === "workspace" ? question : state.workspaces;
         const profile = question.id === "profile" ? { name: question.name ?? "", preview: question.preview ?? null,
           revision: question.preview_revision ?? question.picture_label } : state.profile;
-        const base = { ...state, lastQuestion: question.id, existing, workspaces, profile, creating: null };
+        const base = { ...state, lastQuestion: question.id, existing, workspaces, profile, creating: null, checkingCode: false };
         if (question.kind === "slack_login") {
           // Asked again: Slack refused the code, so stay on the code step.
           const again = state.question?.kind === "slack_login";
@@ -120,8 +123,9 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
       return state.outcome ? { ...state, ended: true } : { ...state, ended: true, outcome: "failed", question: null, creating: null, error: explainExit(action.stderr) };
     case "answered":
       // Keep the sign-in question up while Slack checks the code; it may come back.
+      // A second answer would be read by the next question, which then fails.
       return state.question?.kind === "slack_login"
-        ? state
+        ? { ...state, checkingCode: true, error: "" }
         : { ...state, question: null, status: "Loading…", error: "" };
     case "named":
       return state.profile ? { ...state, profile: { ...state.profile, name: action.name } } : state;
