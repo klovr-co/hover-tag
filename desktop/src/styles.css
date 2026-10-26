@@ -1280,6 +1280,9 @@ button.activity-routine:hover { background: rgba(31, 126, 222, .16); }
 
 /* ── Add-ons: the places they fill. Their own drawing goes inside .addon-mount. */
 .addon-nav span { font-size: 15px; line-height: 1; }
+/* Add-on screens and a Tag's Knowledge tab get a roomier window; add-on screens hold one height and scroll inside. */
+.app.roomy { width: 1040px; }
+.app.fixed.addon-screen { height: 680px; }
 .addon-body { overflow: auto; }
 .addon-mount { min-width: 0; }
 .addon-switch { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; }

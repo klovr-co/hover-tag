@@ -109,6 +109,13 @@ Button places in version 1:
 | `thread.actions` | Under a thread's details, in Activity | `{tag, channel, thread_ts}` |
 | `tag.actions` | In a Tag's header, next to its on switch | `{tag}` |
 
+Room to draw in version 1:
+
+- An add-on screen opens in a 1040 × 680 window. Its content scrolls inside,
+  so a long screen never makes the window taller.
+- While a Tag's Knowledge tab is open, the window is 1040 wide, leaving about
+  500 points for the selected folder next to the folder list.
+
 ## Code
 
 The entry module exports `activate(host)`, which returns the implementation

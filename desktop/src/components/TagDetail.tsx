@@ -44,6 +44,8 @@ interface Props {
   canDescribe?: boolean;
   /** The installed Tag has routines (`routines` capability). */
   canRoutines?: boolean;
+  /** Told when the Knowledge tab opens or closes, so the window can make room for add-on folders. */
+  onKnowledge?: (open: boolean) => void;
   /** The installed Tag can read model lists again (`saved-models` capability). */
   canRefreshModels?: boolean;
 }
@@ -57,12 +59,16 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false, onKnowledge }: Props) {
   const rows = tags.rows;
   const start = rows.find((row) => row.id === initial);
   const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
   const [selected, setSelected] = useState<Selection>({ kind: "tag", id: initial });
   const [tab, setTab] = useState<Tab>(initialTab);
+  useEffect(() => {
+    onKnowledge?.(tab === "knowledge");
+    return () => onKnowledge?.(false);
+  }, [tab, onKnowledge]);
   const [query, setQuery] = useState("");
   const [hideErrors, setHideErrors] = useState(true);
   const all = groups(rows);
