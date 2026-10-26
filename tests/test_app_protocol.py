@@ -125,8 +125,8 @@ class ProtocolTests(unittest.TestCase):
             agent_models.model_names_path(home))
         tag_config.save_config(home / "config/settings.json", {
             **tag_config.load_config(home / "config/settings.json"),
-            "SLACK_CHANNEL_IDS": "C0LAUNCH1,C0GENERAL",
-            "MFS_ALLOWED_SCOPES": "slack://tag-t1-a1/channels/launch__C0LAUNCH1,slack://tag-t1-a1/channels/general__C0GENERAL"})
+            "SLACK_CHANNEL_IDS": "C0LAUNCH1,C0GENERAL"})
+        slack_channel_names.remember(home, "T1", {"C0LAUNCH1": "launch", "C0GENERAL": "general"})
         row = self.cli("list", "--json")["tags"][0]
         promised = example("list.json")["tags"][0]
         self.assertEqual(promised["channels"], row["channels"])
@@ -169,8 +169,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertProvides(logs, example("logs.json"), "tag logs --json")
         self.assertEqual(logs["services"]["slack"], ["Connected to Slack"])
         self.assertEqual([], logs["activity"])
-        tag_config.save_config(home / "config/settings.json", {
-            "MFS_ALLOWED_SCOPES": "slack://tag-t1-a1/channels/launch__C0LAUNCH1"})
+        tag_config.save_config(home / "config/settings.json", {"SLACK_TEAM_ID": "T1"})
+        slack_channel_names.remember(home, "T1", {"C0LAUNCH1": "launch"})
         store = tag_activity.ActivityStore(home / "state/activity")
         store.finish(store.create(team="T1", channel="C0LAUNCH1", thread_ts="1.0", request_ts="1.0",
                                   requester="U1"), "completed")
@@ -261,8 +261,7 @@ class ProtocolTests(unittest.TestCase):
     def test_install_progress_lines_match_the_example_format(self) -> None:
         lines = (EXAMPLES / "install-progress.txt").read_text(encoding="utf-8").splitlines()
         steps = [json.loads(line.removeprefix("@tag-progress "))["step"] for line in lines]
-        self.assertEqual(steps, ["tools", "python", "download", "release", "components",
-                                 "memory", "command", "done"])
+        self.assertEqual(steps, ["tools", "python", "download", "release", "components", "command", "done"])
         stderr = io.StringIO()
         with patch.dict(os.environ, {"TAG_INSTALL_PROGRESS": "jsonl"}), redirect_stderr(stderr):
             tag_install.progress("release", version="0.2.0")
@@ -301,10 +300,10 @@ class ProtocolTests(unittest.TestCase):
     def test_setup_result_reports_what_the_ready_screen_links_to(self) -> None:
         home = tag_instances.create(self.root, "t1-a1").home
         tag_config.save_config(home / "config/settings.json", {
-            "OPENTAG_BACKEND": "codex", "OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5", "MFS_URL": "http://127.0.0.1:13619",
-            "MFS_ALLOWED_SCOPES": "slack://tag-t1-a1/channels/general__C0GENERAL", "SLACK_APP_TOKEN": "xapp-1",
+            "OPENTAG_BACKEND": "codex", "OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5", "SLACK_APP_TOKEN": "xapp-1",
             "SLACK_BOT_TOKEN": "xoxb-1", "SLACK_ALLOWED_USER_IDS": "U1", "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1",
             "SLACK_CHANNEL_IDS": "C0GENERAL", "OPENTAG_BOT_NAME": "Nova"})
+        slack_channel_names.remember(home, "T1", {"C0GENERAL": "general"})
         raw = io.StringIO()
         with patch.object(sys, "__stdout__", raw), patch.object(tag_cli, "_refresh_workspace_icon"):
             self.assertEqual(tag_cli._setup_result(0, "t1-a1", True), 0)

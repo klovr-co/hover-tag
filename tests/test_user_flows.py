@@ -28,13 +28,9 @@ class FlowTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
 
     def seed(self):
-        channels = [opentag_setup.slack_channels.SlackChannel("COLD", "old", False, True)]
-        connector = opentag_setup.write_slack_connector("TOLD", channels, "30", home=self.home)
         values = dict(tag_config.DEFAULTS, SLACK_APP_ID="AOLD", SLACK_TEAM_ID="TOLD",
                       SLACK_APP_TOKEN="xapp-old", SLACK_BOT_TOKEN="xoxb-old", SLACK_ALLOWED_USER_IDS="UOLD",
-                      SLACK_CHANNEL_IDS="COLD", MFS_SLACK_TOKEN="xoxb-history", MFS_SLACK_CONNECTOR_URI="slack://tag-told",
-                      MFS_SLACK_CONNECTOR_CONFIG=str(connector), MFS_ALLOWED_SCOPES="slack://tag-told/channels/old__COLD,file://local/keep",
-                      OPENTAG_CUSTOM="keep")
+                      SLACK_CHANNEL_IDS="COLD", OPENTAG_CUSTOM="keep")
         tag_config.save_config(self.config, values)
         opentag_setup.slack_project(self.home)
         return values
@@ -103,7 +99,6 @@ class FlowTests(unittest.TestCase):
             [
                 unittest.mock.call(self.home, "slack"),
                 unittest.mock.call(self.home, "slack"),
-                unittest.mock.call(self.home, "mfs"),
             ],
         )
 
@@ -126,7 +121,7 @@ class FlowTests(unittest.TestCase):
                 tag_cli, "_migrate_shared_ai"
             ), patch.object(tag_cli, "_rename", return_value=None), patch.object(tag_cli, "missing_runtime_dependencies", return_value=()), patch.object(
                 tag_cli, "slack_ready", return_value=True
-            ), patch.object(tag_cli, "ensure_shared_memory") as memory, patch.object(
+            ), patch.object(tag_cli, "_retire_search_index", return_value=None) as memory, patch.object(
                 tag_cli.display, "pending_row", side_effect=waiting
             ):
                 try:
@@ -270,7 +265,7 @@ class FlowTests(unittest.TestCase):
     def test_settings_channels_use_plural_guided_flow(self):
         self.seed()
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
-            tag_control.ui, "choose", side_effect=[0, 3, 6]
+            tag_control.ui, "choose", side_effect=[0, 3, 5]
         ), patch.object(tag_reconfigure, "edit") as edit, redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
         edit.assert_called_once_with(self.home, "channels")
@@ -287,7 +282,6 @@ class FlowTests(unittest.TestCase):
             self.assertNotIn("SLACK_APP_TOKEN", draft)
             self.assertNotIn("SLACK_CHANNEL_IDS", draft)
             self.assertEqual(draft["OPENTAG_CUSTOM"], "keep")
-            self.assertEqual(draft["MFS_ALLOWED_SCOPES"], "file://local/keep")
             tag_reconfigure.edit(self.home, "app")
             self.assertEqual(call.call_args.kwargs["env"]["TAG_HOME"], str(self.root))
             self.assertEqual(call.call_args.kwargs["env"]["TAG_INSTANCE_HOME"], first)
@@ -298,45 +292,18 @@ class FlowTests(unittest.TestCase):
         draft = self.home / "integrations/setup-drafts/settings-fixture"
         initialize_instance(draft)
         opentag_setup.slack_project(draft)
-        connector = opentag_setup.write_slack_connector("TOLD", [opentag_setup.slack_channels.SlackChannel("CNEW", "new", False, True)], "7", home=draft)
-        values = dict(original, SLACK_CHANNEL_IDS="CNEW", MFS_SLACK_CONNECTOR_CONFIG=str(connector), MFS_SLACK_HISTORY_DAYS="7")
+        values = dict(original, SLACK_CHANNEL_IDS="CNEW")
         tag_config.save_config(draft / "config/settings.json", values)
         return original, draft
 
-    def test_commit_keeps_backup_and_uses_durable_connector(self):
+    def test_commit_keeps_backup(self):
         original, draft = self.make_draft()
         with patch.object(tag_reconfigure.lifecycle, "process_for", return_value=None):
             tag_reconfigure.commit(self.home, draft, original)
         saved = tag_config.read_config(self.config)
         self.assertEqual(saved["SLACK_CHANNEL_IDS"], "CNEW")
-        self.assertTrue(Path(saved["MFS_SLACK_CONNECTOR_CONFIG"]).is_file())
         self.assertEqual(tag_config.read_config(draft / "previous-settings.json"), original)
         self.assertTrue((draft / "previous-slack-cli").is_dir())
-
-    def test_commit_removes_superseded_managed_credential(self):
-        original, draft = self.make_draft()
-        tag_config.update_config(
-            draft / "config/settings.json", {"MFS_URL": "http://Localhost:13619"}
-        )
-        old_credential = tag_reconfigure.tag_credentials.write_slack_history(
-            self.home, "xoxb-old-history"
-        )
-        connector = Path(original["MFS_SLACK_CONNECTOR_CONFIG"])
-        connector.write_text(
-            connector.read_text(encoding="utf-8").replace(
-                'token = "env:MFS_SLACK_TOKEN"',
-                "token = " + json.dumps("file:" + str(old_credential)),
-            ),
-            encoding="utf-8",
-        )
-
-        with patch.object(tag_reconfigure.lifecycle, "process_for", return_value=None):
-            tag_reconfigure.commit(self.home, draft, original)
-
-        self.assertFalse(old_credential.exists())
-        saved = tag_config.read_config(self.config)
-        active_connector = Path(saved["MFS_SLACK_CONNECTOR_CONFIG"])
-        self.assertIn("file:", active_connector.read_text(encoding="utf-8"))
 
     def test_commit_conflict_and_write_failure_keep_active_setup(self):
         original, draft = self.make_draft()
@@ -372,14 +339,10 @@ class FlowTests(unittest.TestCase):
             draft = Path(env["TAG_INSTANCE_HOME"])
             path = draft / "config/settings.json"
             values = tag_config.read_config(path)
-            self.assertNotIn("old__COLD", values["MFS_ALLOWED_SCOPES"])
             self.assertEqual(tag_config.read_config(self.config), original)
             self.assertIn("--review-channels", command)
             self.assertIn("--no-start", command)
-            channels = [opentag_setup.slack_channels.SlackChannel("CNEW", "new", False, True)]
-            connector = opentag_setup.write_slack_connector("TOLD", channels, "30", home=draft)
-            values.update(SLACK_CHANNEL_IDS="CNEW", MFS_ALLOWED_SCOPES="file://local/keep,slack://tag-told/channels/new__CNEW",
-                          MFS_SLACK_CONNECTOR_CONFIG=str(connector))
+            values.update(SLACK_CHANNEL_IDS="CNEW")
             tag_config.save_config(path, values)
             tag_config.save_config(draft / "state/setup-approved.json", {"approved": True})
             return 0
@@ -391,7 +354,6 @@ class FlowTests(unittest.TestCase):
         saved = tag_config.read_config(self.config)
         self.assertEqual(saved["SLACK_CHANNEL_IDS"], "CNEW")
         self.assertEqual(saved["SLACK_CHANNEL_POLICY"], "selected")
-        self.assertNotIn("old__COLD", saved["MFS_ALLOWED_SCOPES"])
         self.assertEqual(saved["OPENTAG_CUSTOM"], "keep")
 
     def test_declining_apply_does_not_replace_active_configuration(self):

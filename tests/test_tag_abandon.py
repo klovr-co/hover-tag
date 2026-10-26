@@ -72,7 +72,6 @@ class RemoveTests(unittest.TestCase):
             from scripts import tag_reset
         self.reset = tag_reset
         for target in (mock.patch.object(tag_cli, "stop_process"),
-                       mock.patch.object(tag_reset, "unregister_connector"),
                        mock.patch.object(tag_reset, "check_app_link"),
                        mock.patch("builtins.print")):
             target.start()
