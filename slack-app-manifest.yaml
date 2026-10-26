@@ -27,6 +27,7 @@ oauth_config:
       - groups:history
       - groups:read
       - im:history
+      - search:read.public
       - team:read
       - users:read
 settings:

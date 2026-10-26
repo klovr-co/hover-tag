@@ -5,7 +5,6 @@ import unittest
 
 from scripts.opentag_process_env import (
     backend_environment,
-    current_channel_scopes,
     text_only_environment,
     without_telemetry_environment,
 )
@@ -62,134 +61,41 @@ class BackendEnvironmentTests(unittest.TestCase):
         self.assertEqual("D123", environment["OPENTAG_CURRENT_CHANNEL_ID"])
 
 
-class CurrentChannelMemoryTests(unittest.TestCase):
-    def test_only_current_slack_channel_scope_reaches_backend(self) -> None:
-        scopes = (
-            "slack://tag-t1/channels/team__C1,"
-            "slack://tag-t1/channels/team-copy__C10,"
-            "slack://tag-t1/channels/private__G2"
-        )
-        self.assertEqual(
-            "slack://tag-t1/channels/team__C1",
-            current_channel_scopes(scopes, "C1"),
-        )
-
-    def test_backend_does_not_receive_connector_or_bridge_credentials(self) -> None:
+class LiveSearchEnvironmentTests(unittest.TestCase):
+    def test_old_index_settings_and_credentials_never_reach_a_run(self) -> None:
         environment = backend_environment(
             {
                 "SLACK_APP_TOKEN": "xapp-secret",
                 "SLACK_BOT_TOKEN": "xoxb-bot",
                 "MFS_SLACK_TOKEN": "xoxp-history",
                 "MFS_ALLOWED_SCOPES": "slack://tag-t1/channels/team__C1",
+                "MFS_CHANNEL_SCOPES": '{"C1": ["file://archive"]}',
             },
             transport="slack",
             conversation_id="C1",
             caller_id="U1",
         )
         self.assertNotIn("SLACK_APP_TOKEN", environment)
-        self.assertNotIn("MFS_SLACK_TOKEN", environment)
+        self.assertFalse([key for key in environment if key.startswith("MFS_")])
         self.assertEqual("xoxb-bot", environment["SLACK_BOT_TOKEN"])
 
-    def test_wrong_channel_has_no_slack_memory_scope(self) -> None:
-        self.assertEqual(
-            "",
-            current_channel_scopes("slack://tag-t1/channels/team__C1", "C9"),
-        )
-
-    def test_non_slack_scopes_do_not_reach_slack_replies(self) -> None:
-        self.assertEqual(
-            "slack://tag-t1/channels/team__C1",
-            current_channel_scopes(
-                "file://local/private,slack://tag-t1/channels/team__C1", "C1"
-            ),
-        )
-
-    def test_channel_scopes_add_mapped_sources_to_that_channel_only(self) -> None:
-        source = {
-            "MFS_ALLOWED_SCOPES": "slack://tag-t1/channels/team__C1,file://archive/whatsapp",
-            "MFS_CHANNEL_SCOPES": json.dumps({
-                "C1": ["file://archive/whatsapp/groups/pickup__abc", "file://other/private"],
-                "C2": ["file://archive/whatsapp"],
-            }),
-        }
-        here = backend_environment(source, transport="slack", conversation_id="C1", caller_id="U1")
-        # The mapped group is inside the saved allowlist; the unlisted source is dropped.
-        self.assertEqual(
-            "slack://tag-t1/channels/team__C1,file://archive/whatsapp/groups/pickup__abc",
-            here["MFS_ALLOWED_SCOPES"],
-        )
-        self.assertNotIn("MFS_CHANNEL_SCOPES", here)
-        elsewhere = backend_environment(source, transport="slack", conversation_id="C9", caller_id="U1")
-        self.assertEqual("", elsewhere["MFS_ALLOWED_SCOPES"])
-
-    def test_channel_scopes_also_follow_a_pre_authorized_scope_plan(self) -> None:
+    def test_the_search_grant_labels_and_action_token_reach_only_this_run(self) -> None:
         environment = backend_environment(
-            {"MFS_ALLOWED_SCOPES": "slack://tag-t1/channels/current__C1,file://archive/whatsapp",
-             "MFS_CHANNEL_SCOPES": '{"C1": ["file://archive/whatsapp"]}'},
+            {"OPENTAG_SLACK_ACTION_TOKEN": "stale"},
             transport="slack",
             conversation_id="C1",
             caller_id="U1",
-            authorized_scopes="slack://tag-t1/channels/support__C2",
-        )
-        self.assertEqual(
-            "slack://tag-t1/channels/support__C2,file://archive/whatsapp",
-            environment["MFS_ALLOWED_SCOPES"],
-        )
-
-    def test_an_invalid_channel_scope_map_adds_nothing(self) -> None:
-        environment = backend_environment(
-            {"MFS_ALLOWED_SCOPES": "slack://tag-t1/channels/team__C1,file://archive/whatsapp",
-             "MFS_CHANNEL_SCOPES": '["file://archive/whatsapp"]'},
-            transport="slack",
-            conversation_id="C1",
-            caller_id="U1",
-        )
-        self.assertEqual("slack://tag-t1/channels/team__C1", environment["MFS_ALLOWED_SCOPES"])
-
-    def test_a_comma_or_bad_channel_id_in_the_map_adds_nothing_at_runtime(self) -> None:
-        for raw in (
-            '{"C1": ["file://archive/whatsapp,file://secret/hr"]}',
-            '{"general": ["file://archive/whatsapp"]}',
-        ):
-            environment = backend_environment(
-                {"MFS_ALLOWED_SCOPES": "slack://tag-t1/channels/team__C1,file://archive",
-                 "MFS_CHANNEL_SCOPES": raw},
-                transport="slack",
-                conversation_id="C1" if "C1" in raw else "general",
-                caller_id="U1",
-            )
-            self.assertNotIn("file://", environment["MFS_ALLOWED_SCOPES"])
-
-    def test_channel_scope_setting_is_validated(self) -> None:
-        from scripts import tag_config
-
-        self.assertIn("MFS_CHANNEL_SCOPES", tag_config.PUBLIC)
-        self.assertIsNone(tag_config.validation_error("MFS_CHANNEL_SCOPES", ""))
-        self.assertIsNone(tag_config.validation_error(
-            "MFS_CHANNEL_SCOPES", '{"C0123ABCD": ["file://archive/whatsapp"]}'))
-        self.assertIn("JSON object", tag_config.validation_error("MFS_CHANNEL_SCOPES", "file://archive"))
-        self.assertIn("JSON object", tag_config.validation_error("MFS_CHANNEL_SCOPES", '{"C1": ["not a uri"]}'))
-        self.assertIn("channel IDs", tag_config.validation_error(
-            "MFS_CHANNEL_SCOPES", '{"general": ["file://archive/whatsapp"]}'))
-        self.assertIn("without commas", tag_config.validation_error(
-            "MFS_CHANNEL_SCOPES", '{"C1": ["file://archive/a,file://secret/b"]}'))
-
-    def test_pre_authorized_cross_channel_scopes_replace_default_narrowing(self) -> None:
-        environment = backend_environment(
-            {"MFS_ALLOWED_SCOPES": "slack://tag-t1/channels/current__C1"},
-            transport="slack",
-            conversation_id="C1",
-            caller_id="U1",
-            authorized_scopes="slack://tag-t1/channels/support__C2",
             channel_labels='{"C2": "support"}',
             slack_search_grant='{"mode": "all"}',
-        )
-        self.assertEqual(
-            "slack://tag-t1/channels/support__C2",
-            environment["MFS_ALLOWED_SCOPES"],
+            action_token="action-1",
         )
         self.assertEqual('{"C2": "support"}', environment["OPENTAG_SLACK_CHANNEL_LABELS"])
         self.assertEqual('{"mode": "all"}', environment["OPENTAG_SLACK_SEARCH_GRANT"])
+        self.assertEqual("action-1", environment["OPENTAG_SLACK_ACTION_TOKEN"])
+        unrelated = backend_environment({"OPENTAG_SLACK_ACTION_TOKEN": "stale"}, transport="slack",
+                                        conversation_id="C1", caller_id="U1")
+        self.assertNotIn("OPENTAG_SLACK_ACTION_TOKEN", unrelated)
+        self.assertEqual("", text_only_environment(environment)["OPENTAG_SLACK_ACTION_TOKEN"])
 
     def test_memory_receipts_reach_only_the_requested_run(self) -> None:
         environment = backend_environment(
