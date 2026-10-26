@@ -1,7 +1,7 @@
 # CLI Backends
 
 Tag treats the backend as the Brain: a non-interactive CLI process that can
-read the prompt, use the workspace, call MFS helpers, and return a Slack-ready
+read the prompt, use the workspace, call Tag helpers, and return a Slack-ready
 answer. Choose the backend explicitly for each deployment.
 
 ## Built-In Backend: Claude Agent SDK
@@ -110,7 +110,7 @@ activity rows, approvals, Stop confirmation, or settings control.
 ## Built-In Backend: Codex Exec
 
 Use this backend when the operator has a working `codex` CLI session and wants
-the runtime agent to inspect files, call MFS helpers, run tests, prepare code
+the runtime agent to inspect files, call Tag helpers, run tests, prepare code
 changes, or execute explicitly requested workspace tasks.
 
 ```bash
@@ -140,7 +140,7 @@ Use this only in a trusted workspace. It intentionally mirrors a high-autonomy
 Slack agent demo, not a locked-down production deployment.
 
 No `OPENAI_API_KEY` is required by this skill path. The backend uses the local
-Codex CLI session and inherits the environment needed for MFS.
+Codex CLI session and inherits the environment Tag helpers need.
 
 When Slack streaming is enabled, Tag invokes `codex exec --json` and reads
 the completed `agent_message` event. The current CLI does not expose answer

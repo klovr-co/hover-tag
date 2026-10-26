@@ -47,8 +47,7 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules [allow\|block\|remove codex\|claude RULE]` |
 | AI accounts | Settings → AI → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
-| Search model (Default or Custom) | Settings → AI → **Search model** | `tag memory embedding local\|custom` |
-| Memory on or off | Settings → AI → **Memory** | `tag memory start` / `stop`; `tag memory status --json` also reports `embedding`, including `embedding.download` while the built-in model downloads; `tag memory download` restarts that download |
+| Delete an earlier release's local Slack index | — | `tag memory remove-old-index --yes`; `tag memory status --json` reports `old_index` |
 | Open at login | Settings → General → **Open Tag at login** | Not needed; `tag autostart on` runs without the app |
 | Update | Settings → **Updates** → **Update Tag** | `tag upgrade` |
 | Release channel | Settings → **Updates** → Stable, Beta, or Alpha | `tag upgrade --channel stable\|beta\|alpha\|edge` |
@@ -141,20 +140,14 @@ resume with the same name, and an existing folder at the new name stops the
 rename with both preserved. After the rename, rolling back to a release without
 named Tags is blocked, as for any named Tag.
 
-MFS is shared by the installation. `tag NAME stop`, restart, reset, and
-failed startup leave shared memory and other Tags running. Inspect it with
-`tag memory status`; after stopping every Tag bridge, an installation-owned
-service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
-an externally managed MFS process. `tag memory embedding [status|local|custom]` chooses how memory computes search
-embeddings (`custom` takes `--base-url` and `--embedding-model`, and a key on
-stdin); see [Choosing the search model after
-install](installation-details.md#choosing-the-search-model-after-install).
-`tag memory start` also works with no Tags,
-for example after you remove the last one: MFS runs from its own state folder,
-not from a Tag's workspace.
+There is no shared memory service. Each Tag's memory is files in its own
+private home, and a Tag searches Slack live when a request needs it (see
+[ADR 0012](../adr/0012-live-slack-search.md)). `tag memory status` says so and
+reports any folder an earlier release's local Slack index left behind; `tag
+memory remove-old-index --yes` deletes Tag's files there; without `--yes` it
+refuses and asks you to confirm.
 
-An upgrade restarts each previously running Tag, leaving stopped Tags stopped
-and shared MFS online. `--no-restart` defers activation until you restart those
+An upgrade restarts each previously running Tag, leaving stopped Tags stopped. `--no-restart` defers activation until you restart those
 Tags. On startup, legacy root-level settings and old working folders are migrated
 automatically after stopping the affected bridge. Private data is consolidated under `~/Tag/NAME/.tag`. Originals are retained;
 conflicting destination files stop migration with an actionable path. Interrupted
@@ -228,8 +221,8 @@ flowchart TD
 
 Plain `tag` suggests the next command based on current state.
 Use `tag status` for health and `tag doctor` for diagnostics. Settings groups Slack connection/access,
-workspace/memory, agent choice, and advanced options. The workspace is managed
-by Tag's persistent home. Changing memory scopes does not index new sources.
+AI, advanced options, API connections and usage. The workspace is managed
+by Tag's persistent home.
 
 `tag` and `tag status` share the same overview, including agent sign-in, Slack,
 memory and first-reply caveats. `tag status --json` reports the same checks in
@@ -251,31 +244,29 @@ local repair is explained in the community report.
 
 Contributors using a prepared source checkout can run `./tag dev` for a
 foreground loop that watches `scripts/**/*.py`, reloads the Slack bridge, and
-streams bridge logs. It owns both Slack and loopback MFS for the session, so
-Ctrl-C stops both; configured remote MFS endpoints remain external. Managed
+streams bridge logs. It owns the Slack connection for the session, so
+Ctrl-C stops it. Managed
 releases do not expose development watching.
 
 Completed `tag setup` checks readiness and exits without repeating onboarding.
-`tag setup` saves approved choices, but it does not start services or index
-history; run `tag start` when ready. (The app starts the Tag for you after
+`tag setup` saves approved choices, but it does not start services; run
+`tag start` when ready. (The app starts the Tag for you after
 setup.) Use
 `tag setup --review` to review choices explicitly. For a separate,
 resumable test configuration, use `tag setup --test`; it keeps data under
 `<TAG_HOME>/testing/onboarding`. This is not a Slack
 sandbox: CLI sign-ins are shared and approved Slack app/channel operations are
 real. Test mode labels its banner, app-creation choice, review warning, and
-default app name (`TEST · <first name>'s Tag`) accordingly. A test home needs a
-separate MFS server before you deliberately start it.
+default app name (`TEST · <first name>'s Tag`) accordingly.
 
 Settings offers guided app/workspace changes, credential reconnection,
-multi-channel selection, history windows and invitation-memory policy.
+multi-channel selection and the invitation policy.
 Stop Tag first with `tag stop` for these changes. They are prepared in a private
 draft using onboarding's validation and approval steps. Pausing or declining
 Apply keeps active settings unchanged; reopen the same Settings action to
 resume a draft. Slack-side actions already approved are not undone by cancelling
 the local draft. Apply preserves the previous settings and app links in the
-printed draft directory, keeps unrelated configuration, and never starts Tag
-or indexes history. Run `tag start` when ready to use the new settings.
+printed draft directory, keeps unrelated configuration, and never starts Tag. Run `tag start` when ready to use the new settings.
 
 `tag setup` saves each completed answer. Ctrl-C pauses; running it again skips
 valid saved answers. It puts timeouts, retries, and other advanced settings
@@ -362,9 +353,7 @@ After confirmation, Tag stops its managed services, moves saved settings and
 local Slack CLI app-link/creation checkpoints into a private timestamped backup
 under `config/backups/` in the Tag home, and launches setup from the beginning.
 It also archives the old invitation-memory sync status. Your workspace, skills,
-connector files, and CLI sign-ins are kept. Tag unregisters this instance's
-Slack history connector from shared MFS, removing the indexed records owned by
-that connector without stopping shared memory or affecting other Tags. A
+connector files, and CLI sign-ins are kept. A
 separate prompt offers to keep or permanently delete the Slack app, defaulting
 to **Keep**.
 It shows the saved bot name, App ID, and workspace Team ID. Deletion requires
@@ -433,9 +422,7 @@ it can join; choosing one adds Tag to it. You can choose none: new Tags follow
 invitations, so `/invite` the app in any channel, private ones too, and Tag
 picks it up about a minute later while it runs. There is no review after
 channels; the Create recap was the approval. Setup saves the configuration
-without starting services or indexing history. Run `tag start` to initialize
-shared memory and connect Slack. Starting memory for the first time can take a
-couple of minutes. Plain terminals fall back to numbered input, and `q` exits so
+without starting services. Run `tag start` to connect Slack. Plain terminals fall back to numbered input, and `q` exits so
 setup can be finished later.
 
 After the first successful `tag start`, Tag sends a welcome DM to the single
@@ -461,28 +448,25 @@ verifies membership before saving stable channel IDs. New-app templates request
 this scope; existing apps need an approved permission update/reinstall or a
 manual invitation if it is absent. Private channels require an invitation to
 appear.
-New onboarding approves invitation-following memory (`SLACK_CHANNEL_POLICY=invited`):
+New onboarding approves invitation following (`SLACK_CHANNEL_POLICY=invited`):
 all channels the bot has joined, including later invitations, become eligible
-for replies and automatic indexing with the configured history window. Anyone
-able to invite the app can expand this set. Public channels the bot has not
-joined are never automatically indexed. Authorized callers remain restricted.
-The running bridge reconciles membership about every minute and requests an
-incremental MFS sync on changes and about every five minutes. History credentials
-are validated independently before a request. Current-channel reply scoping
-remains enforced by the normal helper flow, not a hardened boundary (ADR 0001).
-Leaving a channel removes normal retrieval access after reconciliation; already
-indexed data is not automatically erased, and an in-flight index job may finish.
-`tag status`/`tag inspect --json` distinguish invitation-memory sync state from
-service health. `sync_requested` is not proof of index completion or a reply.
+for replies and for live search. Anyone able to invite the app can expand this
+set. Authorized callers remain restricted. The running bridge reconciles
+membership about every minute, and at once when Slack reports an invitation.
+Current-channel reply scoping remains enforced by the normal helper flow, not a
+hardened boundary (ADR 0001). Leaving a channel removes search access after
+reconciliation; nothing was copied, so there is nothing to erase. `tag
+status`/`tag inspect --json` distinguish the membership check from service
+health.
 
 Existing completed setups without this setting retain selected-channel behavior.
 To opt in using the updated installation, set
 `tag config set SLACK_CHANNEL_POLICY invited`, then stop/start Tag. This authorizes
-indexing all currently joined channels as well as future invitations. Use
+replies and live search in all currently joined channels as well as future invitations. Use
 `selected` to retain a manual allowlist. In invited mode App Home explains the
 invitation policy instead of offering a conflicting manual channel picker.
 In selected mode its picker changes reply destinations only; setup still approves
-new memory channels. Raw IDs remain in the JSON/automation interface by design.
+new channels. Raw IDs remain in the JSON/automation interface by design.
 An invalid JSON file must be repaired before settings can be changed; setup
 never replaces it silently.
 
@@ -540,8 +524,8 @@ and instructions to fix it yourself in Slack (or ask a workspace admin).
 Choose **Open app settings**, **Check again**, or **Exit · finish setup later**; channel joining
 also lets you return to channel selection. Outside the versioned upgrade migrations
 above, Tag does not repair permissions or reinstall apps as part of error recovery.
-Bot scopes, Socket Mode app-token scopes,
-and separate history credentials require different fixes. If Slack issues a new
+Bot scopes and Socket Mode app-token scopes
+require different fixes. If Slack issues a new
 token, update it privately in Tag settings before retrying. Normal approved
 credential handoff remains unchanged; it uses remote app settings without `--force`.
 Manual permission recovery still needs live acceptance testing.
@@ -556,7 +540,7 @@ Manual permission recovery still needs live acceptance testing.
 | Change one setting | `tag config set OPENTAG_BACKEND claude --json` | Validate and atomically save only that setting |
 | Store a token | `tag config set SLACK_BOT_TOKEN --stdin --json` | Read its value from standard input; never echo it |
 | Diagnose | `tag doctor --json` | Check configuration, memory, backend executable, and Slack API access |
-| Check services | `tag status --json` | Require healthy MFS and a connected Slack bridge for exit 0 |
+| Check services | `tag status --json` | Require a connected Slack bridge for exit 0 |
 | Check for updates | `tag upgrade --dry-run --json` | Verify the saved channel's target without changing the installation |
 | Upgrade | `tag upgrade` | Stage and atomically select the verified release, restarting managed services when needed |
 | Install an older release | `tag upgrade --version X.Y.Z --allow-downgrade` | Explicitly override the downgrade guard; prefer rollback for the previous release |
@@ -602,14 +586,6 @@ the recorded choice instead of changing it, so stopping a Tag while the
 service is starting it leaves the Tag off. Each restart counts until the Tag has
 stayed up for five minutes, so a Tag that crashes right after starting also
 backs off.
-
-The same service keeps shared memory (MFS) running. It restarts MFS, with the
-same back-off, when a kept Tag needs it (its `MFS_URL` is the local server Tag
-manages) or when `tag memory start` was the last thing you ran. `tag memory
-stop` records that it should stay off. A remote `MFS_URL` is never started by
-Tag. `tag memory status` and `tag autostart --json` report `keep_running` for
-memory. Without `tag autostart on`, nothing restarts MFS: a stopped server stays
-down until you run `tag memory start` or `tag start`.
 
 On Linux, systemd starts a user service at boot only while the account has
 linger on. `tag autostart on` and the service itself try `loginctl
@@ -713,12 +689,11 @@ Neither proves a Slack mention produced a reply. After startup, send a mention
 in the permitted channel and observe the answer before declaring that journey
 verified. `first_reply` stays `not_verified`; it is not an automatic receipt.
 
-For Slack memory failures, rerun setup and review the selected channels,
-history credential, window, and indexing approval. `tag start` registers the
-saved connector after MFS is healthy, then connects without waiting for the
-first import: the Tag answers right away, and history search covers each
-channel once memory has indexed it. Additional sources still require normal
-MFS configuration and an exact URI in `MFS_ALLOWED_SCOPES`.
+For Slack search failures, check that the Tag and the person are members of
+the channel and that the Tag's Slack app has `search:read.public` (`tag start`
+asks for an app update when it is missing). Public search needs a request from
+Slack itself and isn't available to guests; see
+[ADR 0012](../adr/0012-live-slack-search.md).
 
 If an interrupted settings write leaves `settings.json.lock`, first ensure no
 configuration writer is active before removing that specific lock and retrying.

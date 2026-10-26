@@ -80,13 +80,12 @@ Claude auto memory and Codex memories are disabled for Tag runs
 (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `-c features.memories=false`), so Tag
 memory is the only place facts are kept between runs.
 
-Forgetting does not change Slack messages or MFS indexes. A forgotten fact may
-still be found in indexed Slack history.
+Forgetting does not change Slack messages. A forgotten fact may still be found
+by searching Slack.
 
-## MFS retrieval
+## Slack search is not memory
 
-Retrieval from sources the operator has indexed and authorized, such as Slack
-history, repositories, docs, issues, databases, object stores, or web crawls.
-Add longer durable context as a real MFS source, then include that source root
-in `MFS_ALLOWED_SCOPES`. The runtime uses `mfs_search.py`, `mfs_ls.py`, and
-`mfs_cat.py` to retrieve only from those allowed roots.
+Older Slack messages are not kept by Tag. When a request needs them, the
+runtime reads Slack live with `slack_search.py`, inside the request's search
+grant, and stores nothing it reads. See `references/runtime-agent.md` and
+ADR 0012.

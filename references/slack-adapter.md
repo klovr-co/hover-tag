@@ -14,27 +14,29 @@ scratch. The bridge is intentionally thin. It only:
    the selected backend provides only a completed response.
 
 The adapter does not answer task questions or classify their meaning. It passes
-the thread, current-channel MFS scope, and a separate cross-channel search grant
-to a fresh CLI agent. The runtime agent understands the request and chooses
-whether to call the dedicated Slack-history helper.
+the thread, a search grant and Slack's `action_token` for the request to a fresh
+CLI agent. The runtime agent understands the request and chooses whether to call
+the Slack search helper.
 
-By default, `scripts/mfs_search.py` remains narrowed to the invoking channel
-exactly as before. Independently, `scripts/slack_search_scope.py` computes the
-intersection of the installation workspace, `SLACK_CHANNEL_IDS`, indexed
-channel scopes, and live caller visibility. Both Codex and Claude receive that
-same pre-authorized result through `scripts/slack_history_search.py`. With no
-`--channel` argument the helper searches the entire grant; repeated `--channel`
-arguments select exact names from it. Missing, malformed, ambiguous, or
-ungranted names fail without searching. Authorization policy is enforced by
-code and must not be reimplemented in a prompt or adapter.
+`scripts/slack_search_scope.py` computes the grant: the intersection of the
+installation workspace, `SLACK_CHANNEL_IDS`, the Tag's channel membership and
+live caller visibility, plus whether public search is allowed (the request text
+asks for all channels and the caller isn't a guest). Both Codex and Claude
+receive the same grant through `scripts/slack_search.py`, which reads the
+current conversation by default, exact names from the grant with repeated
+`--channel`, and the whole grant plus Slack's public search with `--all`.
+Missing, malformed, ambiguous, or ungranted names fail without searching.
+Authorization policy is enforced by code and must not be reimplemented in a
+prompt or adapter. Nothing the helper reads is stored (ADR 0012).
 
 The Slack app token opens Socket Mode for receiving invocations. The bot token
 authenticates the bot, reads current threads, checks app and workspace identity
-and caller visibility for authorized cross-channel search, and posts replies.
+and caller visibility for authorized cross-channel search, searches Slack live,
+and posts replies.
 The local backend inherits the bot token; Tag withholds the app token and bridge
 access-control settings as described in [Security](../SECURITY.md#credential-boundary).
-`tag setup` separately configures an MFS Slack-history credential, explicit
-channel-ID allowlist, and source URI.
+`tag setup` configures the explicit channel-ID allowlist or invitation policy;
+there is no separate history credential.
 
 Relevant Slack docs:
 
@@ -42,16 +44,7 @@ Relevant Slack docs:
 - App mentions: <https://docs.slack.dev/reference/events/app_mention/>
 - Direct messages: <https://docs.slack.dev/reference/events/message.im/>
 - OAuth scopes: <https://docs.slack.dev/reference/scopes/>
-
-## Prerequisites
-
-MFS must be available for the completed service. Slack setup creates its
-connector configuration; `tag start` registers it after starting MFS:
-
-1. `uv tool install mfs-server` → `mfs-server run` (binds `127.0.0.1:13619`;
-   verify with `curl -s 127.0.0.1:13619/healthz`).
-2. Use **mfs-ingest** only for optional sources beyond the Slack channels chosen
-   during `tag setup`.
+- Real-time Search: <https://docs.slack.dev/apis/web-api/real-time-search-api>
 
 ## End-To-End Checklist
 
@@ -65,8 +58,7 @@ connector configuration; `tag start` registers it after starting MFS:
    Slack CLI hands the Socket Mode and bot tokens over privately; hidden
    prompts are a fallback. Setup checks workspace and app identity.
 5. Select joined or public channels, or none: new Tags follow invitations.
-   Setup validates the history credential before writing a connector limited
-   to those channels; it never indexes during setup.
+   Setup copies nothing from these channels.
 6. Run `tag start`.
 7. Mention the bot in each selected test channel and record an observed reply;
    service readiness alone is not an end-to-end pass.
@@ -126,68 +118,6 @@ For a private channel, bot membership matters even when the app has
 `groups:history`. If `opentag_doctor.py` reports `not_in_channel`, invite the bot
 again or use a channel where the bot is present.
 
-## MFS Memory Setup
-
-Use MFS to expose external context as Memory. Keep the allowed scope narrow for a
-Slack demo.
-
-Minimal local workspace source:
-
-```bash
-mfs add /path/to/workspace
-export MFS_ALLOWED_SCOPES="file://local/path/to/workspace"
-```
-
-Slack history source:
-
-```toml
-# /tmp/opentag-slack.toml
-token = "env:SLACK_MEMORY_TOKEN"
-channel_types = ["public_channel", "private_channel"]
-channel_names = ["team-demo-channel"]
-include_unjoined = true
-oldest = "now-30d"
-max_read_rows = 50000
-```
-
-```bash
-export SLACK_MEMORY_TOKEN="xoxb-or-xoxp-..."
-mfs add slack://team-memory --config /tmp/opentag-slack.toml
-export MFS_ALLOWED_SCOPES="slack://team-memory,file://local/path/to/workspace"
-```
-
-### More sources
-
-Tag's reach is whatever MFS has indexed plus what you list in
-`MFS_ALLOWED_SCOPES`. Add each once with **mfs-ingest** (it handles credentials),
-then append its root to the scope list:
-
-```bash
-mfs add github://your-org/your-repo --config ./github.toml   # code + issues
-mfs add linear://your-workspace     --config ./linear.toml   # issues
-mfs add postgres://prod             --config ./pg.toml        # rows as objects
-export MFS_ALLOWED_SCOPES="slack://team-memory,github://your-org/your-repo,linear://your-workspace,file://local/path/to/workspace"
-```
-
-A Slack request reaches only its own channel's Slack history. Other sources in
-`MFS_ALLOWED_SCOPES` reach it only through `MFS_CHANNEL_SCOPES`, a JSON object
-from channel ID to the extra scopes that channel may search. Tag keeps only the
-scopes that fall inside `MFS_ALLOWED_SCOPES`, and ignores the whole map if it is
-not valid (bad JSON, a key that is not a channel ID, or a URI with a comma):
-
-```bash
-tag config set MFS_CHANNEL_SCOPES '{"C0123ABCD": ["file://local/path/to/workspace"]}'
-tag restart
-```
-
-Do not hand-write Tag's primary Slack connector TOML; setup creates it with
-`channel_ids` and a bounded history window. For other connector types, use the
-**mfs-ingest** skill and `docs/connectors/`.
-
-Use a bot token for channels the bot can join. Use a user token only when the
-demo intentionally needs the user's own visible Slack context, and always pair it
-with `channel_ids` or `channel_names` to avoid indexing the entire workspace.
-
 ## Environment
 
 Required:
@@ -195,9 +125,6 @@ Required:
 ```bash
 export SLACK_APP_TOKEN="xapp-..."
 export SLACK_BOT_TOKEN="xoxb-..."
-export MFS_URL="http://127.0.0.1:13619"
-export MFS_TOKEN="$(cat ~/.mfs/server.token)"
-export MFS_ALLOWED_SCOPES="slack://team-memory,github://owner/repo,file://local/path/to/workspace"
 export OPENTAG_BACKEND="<backend>"   # claude | codex
 export OPENTAG_WORKDIR="/path/to/workspace"
 export SLACK_CHANNEL_IDS="<channel-id>,<another-channel-id>"
@@ -249,14 +176,16 @@ auth and tool execution.
 - Private channels require caller membership. Restricted and guest users require
   membership for public channels too; pagination is followed to a definitive
   result.
-- Shared, archived, deleted, unindexed, unapproved, or wrong-workspace channels
-  never enter the backend scope.
+- Shared, archived, deleted, unapproved, or wrong-workspace channels, and
+  channels the Tag isn't in, never enter the grant.
 - An unavailable requested name is reported generically. Suggestions are drawn
   only from channels whose access was already proven.
-- MFS read or search failures remain ordinary retrieval failures and never cause
-  a retry with a wider scope.
-- Channel names in results are refreshed display metadata. IDs embedded in MFS
-  scopes remain the authorization key across renames.
+- Slack read or search failures remain ordinary retrieval failures and never
+  cause a retry with a wider scope. Public search without an `action_token`, for
+  a guest, past about 10 calls a minute, or without `search:read.public` is
+  skipped with a note.
+- Channel names in results are refreshed display metadata. Channel IDs in the
+  grant remain the authorization key across renames.
 
 Optional:
 
@@ -371,12 +300,10 @@ The doctor checks:
 - at least one allowed Slack caller is configured;
 - Slack bot token authenticates;
 - the bot can see the target channel and read its history;
-- MFS is reachable and each allowed scope can be listed;
+- Tag memory can be read;
 - the selected backend is available.
 
-Do not proceed until all checks pass. A failed MFS scope usually means the source
-is not registered, not indexed yet, or the URI does not match the registered
-connector root. A failed Slack channel check usually means missing scopes, app
+Do not proceed until all checks pass. A failed Slack channel check usually means missing scopes, app
 not reinstalled after scope changes, or bot not invited to the channel.
 
 ## Run
@@ -420,10 +347,7 @@ python scripts/opentag_agent.py \
 ## Permission Notes
 
 - Invite the Slack app only to channels where the bridge should respond.
-- Keep broad Slack history access in MFS connector config, not in the Slack
-  bridge. Use channel IDs or channel names to allowlist what the connector
-  indexes.
-- Treat `MFS_ALLOWED_SCOPES` as the runtime memory boundary. The helper scripts
-  reject reads and searches outside those scopes.
+- Treat the bridge's search grant as the runtime boundary for Slack: the helper
+  rejects channels outside it, and public search needs the person's own words.
 - Use a sandbox Slack channel and a non-production workspace when testing
   backend command execution.

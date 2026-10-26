@@ -1,7 +1,7 @@
 # Tag domain context
 
 Tag is a self-hosted bridge that lets authorized Slack users delegate work to
-a local coding-agent backend with optional MFS retrieval.
+a local coding-agent backend that searches Slack live when a request needs it.
 
 ## Glossary
 
@@ -16,10 +16,12 @@ a local coding-agent backend with optional MFS retrieval.
   and applies to all Slack requests to that Tag.
 - **AI connection** — one shared provider account for every Tag in an installation,
   managed in Settings. Model and thinking choices belong to each Tag.
-- **MFS scope** — an operator-configured URI root used by Tag's helper commands
-  to constrain normal list, read, and search operations.
-- **Required service** — local MFS or the Slack bridge. Tag is healthy only when
-  MFS answers its health check and the bridge has a live Socket Mode connection.
+- **Live search** — a Tag reading Slack when a request needs it: channels it is
+  a member of through `conversations.history` and `replies`, and public channels
+  through Slack's Real-time Search API when the person asks. Nothing it reads is
+  stored. See ADR 0012.
+- **Required service** — the Slack bridge. Tag is healthy only when the bridge
+  has a live Socket Mode connection.
 - **Managed process** — a service Tag started and may later stop after validating
   the PID, process start time, and expected command identity.
 - **Tag** — one local Slack identity, configuration, agent working folder,

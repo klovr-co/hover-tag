@@ -2,28 +2,29 @@
 
 Tag is alpha software that runs a local coding agent in response to chat
 messages. It is not a production security boundary. Use a dedicated host or
-sandbox workspace, an isolated chat channel, least-privilege credentials, and
-explicit MFS scope allowlists.
+sandbox workspace, an isolated chat channel, and least-privilege credentials.
 
 ## Credential boundary
 
 The agent backend inherits the bridge process environment, including
-`SLACK_BOT_TOKEN`, `MFS_TOKEN`, and unrelated ambient credentials. Tag removes
+`SLACK_BOT_TOKEN` and unrelated ambient credentials. Tag removes
 `SLACK_APP_TOKEN`, `SLACK_CHANNEL_ID`, `SLACK_CHANNEL_IDS`, and
 `SLACK_ALLOWED_USER_IDS` before
 starting backend work, but it does not broker the remaining credentials.
 
-Consequently, Slack and MFS helper allowlists are guardrails for normal agent
+Consequently, Slack helper allowlists are guardrails for normal agent
 operation, not hardened capability controls: an agent with shell access can use
 inherited credentials directly. Run Tag under a dedicated local account or
 external sandbox and give every credential only the permissions appropriate
 for that environment.
 
-For cross-channel history search, the bridge—not the model—intersects stable
-channel IDs across the configured workspace, operator approval, indexed MFS
-scopes, and live caller visibility before launching the backend. The model can
-choose to invoke the cross-channel helper, but that helper can search only the
-bridge-generated grant; failures deny expansion. This is still an application
+For Slack search, the bridge—not the model—intersects stable channel IDs
+across the configured workspace, operator approval, the Tag's channel
+membership, and live caller visibility before launching the backend, and allows
+Slack's public search only when the request text asks for all channels. The
+model can choose to invoke the search helper, but that helper can read only the
+bridge-generated grant; failures deny expansion. The helper stores nothing it
+reads, though the backend's own session transcript may keep what a run used. This is still an application
 guardrail under ADR 0001, not a credential broker or hardened isolation
 boundary.
 

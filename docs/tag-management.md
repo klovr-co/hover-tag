@@ -60,8 +60,7 @@ Click the gear to open **Settings**. It has four tabs:
 
 - **General**: **Open Tag at login**, **Appearance**, **Keep Tags running**,
   and **Share usage data**.
-- **AI**: **AI connections** (your Codex and Claude accounts) and **Memory**
-  (start or stop it, and choose its search model).
+- **AI**: **AI connections** (your Codex and Claude accounts).
 - **Updates**: **Update Tag** and the **Release channel** (Stable, Beta, or
   Alpha).
 - **About**: documentation and **Replay onboarding**.
@@ -167,28 +166,10 @@ start after you sign in to your computer and restart if they stop. Turn on
 
 In the terminal: `tag autostart on`.
 
-Keep Tags running also restarts memory (MFS) if it stops. **Settings** → **AI** →
-**Memory** shows whether memory is running, whether it restarts itself, and
-which search model it uses. Turn it off to stop memory (stop your Tags first);
-in the terminal, `tag memory status`, `start`, and `stop`.
-
-After a first install the built-in search model downloads in the background (about
-560 MB). Home shows the model, how far it is, and that memory search isn't available
-until it finishes; Settings → AI shows the same. If it stops, choose **Try again** on
-Home, or run `tag memory download`. `tag memory start` waits for a running download
-instead of giving up.
-
-**Search model** (in **Settings** → **AI**, under Memory) chooses how memory
-turns text into searchable vectors. **Default** is built in: it runs on this
-computer, is private, works offline, and is about 560 MB. **Custom** points memory
-at any OpenAI-compatible endpoint: OpenAI itself (`https://api.openai.com/v1`
-with a key), Ollama (`http://localhost:11434/v1`, no key), LM Studio, vLLM, or
-your own gateway. Give its address and the model's name; the key is optional.
-Choose **Switch**. Tag tries the endpoint first, so a wrong address, model or
-key changes nothing, and then memory indexes your Slack channels again, so
-search is partial until it finishes. A remote endpoint receives the text of
-indexed messages. In the terminal: `tag memory embedding local` or `custom`, or
-**Workspace and memory** in `tag settings`.
+Each Tag keeps its own memory as files in its private folder, with a history
+of every change; there is no memory service to run. A Tag searches Slack live
+when a request needs it. See
+[What Tag knows](concepts/what-tag-knows.md).
 
 Tags started this way find `claude` and `codex` in the usual install folders
 (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`). They also look in the
@@ -239,7 +220,7 @@ doesn't have this. Remove the Tag and add a new one instead.
 | Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules block codex 'git push'` (or `allow`, `remove`) |
 | AI accounts | Settings → AI → **AI connections** | `tag settings ai` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
-| Start or stop memory | Settings → AI → **Memory** | `tag memory start` / `stop` / `status` |
+| See or edit what a Tag remembers | the Tag → **Knowledge** | `tag NAME knowledge list` / `read` / `edit` |
 | Update | Settings → Updates → **Update Tag** | `tag upgrade` |
 | Release channel | Settings → Updates → **Release channel** | `tag upgrade --channel beta` |
 | Usage data | Settings → General → **Share usage data** | `tag telemetry on\|off` |

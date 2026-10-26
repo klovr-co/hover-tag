@@ -7,7 +7,7 @@ impact are welcome.
 2. Keep credentials, `.env`, logs, and `.runtime` state out of commits.
 3. Run `./scripts/ci_check.sh`.
 4. Open a pull request explaining the user-visible behavior, test evidence, and
-   any change to chat, agent, credential, or MFS scope boundaries.
+   any change to chat, agent, credential, or Slack search boundaries.
 
 ## Choosing a release
 

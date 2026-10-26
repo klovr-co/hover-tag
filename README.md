@@ -113,8 +113,8 @@ for terminal and source installs.
 | Find an email and share the relevant details in Slack | [Use Gmail from Slack](https://www.hover.team/tag/use-gmail-from-slack/) |
 
 Tag connects **Slack → your local agent → your files and permitted sources**.
-Optional [MFS](https://github.com/zilliztech/mfs) indexing makes approved history
-and other sources searchable. Tag remembers facts you explicitly ask it to
+When a request needs it, a Tag searches Slack live with its own bot connection
+and keeps no copy of what it reads. Tag remembers facts you explicitly ask it to
 remember, but not every conversation. [See how it works →](https://www.hover.team/tag/how-it-works/)
 
 ## Early, open source, yours to run
@@ -123,7 +123,7 @@ Tag is an early project for experimentation in a trusted environment. Codex and
 Claude Code are both supported, as are other AI providers through compatible APIs
 and gateways; each Tag has one model, chosen in the Tag app or the
 CLI. Your agent runs with local
-account permissions and inherited bot/MFS credentials; Tag is not a hardened
+account permissions and inherited bot credentials; Tag is not a hardened
 sandbox. Connected services process requests under their own data policies.
 Read the [security model](docs/adr/0001-credential-boundary.md) before connecting
 sensitive accounts or files.
