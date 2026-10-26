@@ -92,15 +92,13 @@ def build_prompt(
     question: str,
     thread_text: str,
     attachments_dir: Path | None,
-    allowed_scopes: str,
     output_manifest: Path | None = None,
 ) -> str:
     """One self-contained prompt, for transports without separate instructions."""
     instructions = build_instructions(skill_dir=skill_dir, workdir=workdir, channel_id=channel_id,
                                       output_files=output_manifest is not None)
     request = build_request(channel_id=channel_id, question=question, thread_text=thread_text,
-                            attachments_dir=attachments_dir,
-                            allowed_scopes=allowed_scopes, output_manifest=output_manifest)
+                            attachments_dir=attachments_dir, output_manifest=output_manifest)
     return f"{instructions}\n\n{request}"
 
 
@@ -110,7 +108,6 @@ def build_request(
     question: str,
     thread_text: str,
     attachments_dir: Path | None,
-    allowed_scopes: str,
     output_manifest: Path | None = None,
     continued: bool = False,
 ) -> str:
@@ -133,8 +130,7 @@ def build_request(
         context = "Slack thread context:"
     return f"""
 Request context (these paths and grants apply to this request only):
-- Allowed MFS scopes: {allowed_scopes}
-- Authorized Slack channel labels: {json.dumps(slack_channel_labels, ensure_ascii=False, sort_keys=True)}
+- Slack channels this request may search beyond this conversation: {json.dumps(slack_channel_labels, ensure_ascii=False, sort_keys=True)}
 - Slack attachments directory: {attachments_dir or "(none)"}
 - Generated images directory: {image_results_dir or "(unavailable)"}
 - Temporary artifacts directory: {artifact_results_dir or "(unavailable)"}{manifest}
@@ -193,20 +189,20 @@ Runtime context:
 - Conversation id: {channel_id}
 - Workspace root: {workdir}
 - Channel artifact folder: {artifact_directory}{delivery}
-- Run a Tag helper such as `mfs_search.py` as (NAME replaced):
+- Run a Tag helper such as `slack_search.py` as (NAME replaced):
   `{helper_command(skill_dir / "scripts" / "NAME.py")}`
 - Tag skills hold the procedures; load the matching one before using its helpers:
   {", ".join(skills)}.
   If your skill list lacks one, read `{runtime_plugin_dir(skill_dir) / "skills" / "NAME" / "SKILL.md"}`.
-- Each request's "Request context" gives its MFS scopes, Slack channel labels, and
+- Each request's "Request context" gives the Slack channels it may search, and its
   attachment, result, and manifest paths. Use only the latest request's values.
 
 How to work:
 - Find the current request in the Slack thread and use earlier messages to resolve
   follow-ups such as "that connector" or "do the same for X".
-- Search only when external context is needed: `mfs_search.py "QUERY" --top-k 8`, then
-  `mfs_cat.py` for line-level evidence. `mfs_search.py` covers only this channel; for
-  named channels, all of Slack, or this channel's history, use tag-slack-search.
+- Search Slack only when the request needs earlier messages: `slack_search.py search
+  "QUERY"` reads this conversation live. For named channels, all of Slack, or a
+  channel summary, use tag-slack-search.
   When the scope wording is conflicting or fragmentary, such as `search general
   workspace all`, ask a short scope question and do not search.
 - For explicit tasks, run commands or edit files in the workspace; keep changes scoped.
@@ -1036,8 +1032,6 @@ def main() -> int:
             channel_artifact_directory(workdir, args.channel_id, create=True)
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
-    allowed_scopes = os.getenv("MFS_ALLOWED_SCOPES") or f"file://local{workdir}"
-    os.environ["MFS_ALLOWED_SCOPES"] = allowed_scopes
     prompt = build_prompt(
         skill_dir=args.skill_dir.resolve(),
         workdir=workdir,
@@ -1045,7 +1039,6 @@ def main() -> int:
         question=args.question,
         thread_text=read_text(args.thread_file),
         attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
-        allowed_scopes=allowed_scopes,
         output_manifest=args.output_manifest.resolve() if args.output_manifest else None,
     )
     # Rich transports keep standing instructions out of the conversation history,
@@ -1058,7 +1051,6 @@ def main() -> int:
         channel_id=args.channel_id,
         question=args.question,
         attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
-        allowed_scopes=allowed_scopes,
         output_manifest=args.output_manifest.resolve() if args.output_manifest else None,
     )
     fresh_request = build_request(thread_text=read_text(args.thread_file), **request_options)

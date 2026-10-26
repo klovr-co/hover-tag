@@ -43,7 +43,8 @@ creating another app. Tag preserves an existing app's grants and verifies that
 they include the selected workspace. If access is missing, an organization admin
 must add the app to that workspace before you retry.
 
-Each Tag still responds in one workspace and retrieves only its approved channel
-memory. The managed memory server supports organization tokens with an explicit
-workspace; an externally managed MFS server needs equivalent workspace-aware
-Slack connector support. Existing workspace authorizations continue to work.
+Each Tag still responds in one workspace and searches only the channels a
+request may read there. Live search passes the workspace with organization
+tokens. Slack's public search may refuse organization-wide apps
+(`enterprise_is_restricted`); the Tag then says so and still reads the
+channels it is in. Existing workspace authorizations continue to work.

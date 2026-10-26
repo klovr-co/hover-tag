@@ -6,6 +6,31 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Move a Tag to another computer. **Export Tag…** in the Tag's Details saves
+  its memory and history, skills, threads and settings to one `.hovertag`
+  file, never its passwords or tokens. **Import** on Home adds it on the new
+  computer; then connect Slack and choose the same app. Stop the Tag on the old
+  computer first. Imported routines start paused. In the terminal, use
+  `tag NAME export` and `tag import FILE`.
+- See and edit what each Tag knows. The Tag's **Knowledge** tab shows its
+  memory (for all channels and for each channel) and its skills as plain
+  documents, with a Visual or Markdown view. Hover an entry to see who saved
+  it and open the Slack thread it came from. **History** lists every change
+  with its diff, and **Undo** puts back what a change replaced, including
+  restoring something the Tag was asked to forget. **Add to knowledge** gives
+  the Tag something to remember from the app. Edits keep the same limits and
+  safety checks as memory saved in Slack, and the Tag uses them from its next
+  reply. In the terminal, `tag NAME knowledge list|read|edit|add|forget|history|show|undo`
+  does the same.
+- Each Tag's memory is now plain markdown files with a full history. What
+  someone asked a Tag to remember lives in `memory/core.md` (always loaded),
+  `memory/notes/` and `memory/channels/<channel>/`. Every change is recorded
+  with who asked and the Slack thread it came from, in a private history
+  outside the Tag's folder, and the old limit of 10 values per entry is gone.
+  Forgotten entries stay restorable by the Tag's owner unless someone asks to
+  forget them completely (`--drop-old`). Existing memory moves over on the
+  first start; what each request sees stays exactly the same, and the old
+  files stay as a backup.
 - Choose what each Tag may do without asking, with each agent's own
   settings. In the Tag's **Details**, **Permissions** shows Codex's sandbox
   (Read only, Workspace write, Full access), approval policy (Default,
@@ -112,6 +137,25 @@ All notable changes to Tag are documented here.
   HTML or log file. Before, it saw only the first 12,000 characters.
 
 ### Changed
+
+- Tags search Slack live instead of keeping a local copy. When a request needs
+  older messages, a Tag reads the current conversation and channels you name
+  (when you and the Tag are both in them) with its own Slack connection, and
+  searches all public channels with Slack's own search when you ask for that.
+  It stores nothing it reads, so results show Slack as it is now. There is no
+  personal sign-in step. Slack's public search works for requests from Slack
+  (a mention or a DM), not for guests, and about 10 times a minute; the Tag
+  says when it skipped it. The Tag's Slack app asks for one new permission,
+  `search:read.public`, on its next start.
+- Tag no longer installs a search model or runs a memory server, so the
+  install is about 1.2 GB instead of 1.8 GB and has no background download.
+  Settings no longer has Memory or Search model, and the install screen goes
+  straight to **Install Tag**. On the first start after upgrading, Tag asks the
+  old index server to drop every Tag's Slack copies, stops it, and removes each
+  Tag's index settings and history credential. The index folder may hold other
+  data, so Tag leaves it and says where it is; `tag memory remove-old-index
+  --yes` deletes Tag's files there. `tag rollback` to a release that needs the
+  old index is refused after this.
 
 - Always allow in Slack now saves a Codex rule for that Tag only, in the Tag's
   folder, instead of in your global Codex rules. Rules saved before stay global.

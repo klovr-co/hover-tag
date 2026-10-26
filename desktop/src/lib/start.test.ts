@@ -12,11 +12,11 @@ const states = (lines: string[]) => {
 describe("start progress", () => {
   it("groups Tag's readiness rows into steps", () => {
     expect(["runtime", "slack-app", "picture", "workspace", "start"].map(phaseOf)).toEqual(Array(5).fill("prepare"));
-    expect(["memory", "channel-memory", "checks", "slack"].map(phaseOf)).toEqual(["memory", "channels", "slack", "slack"]);
+    expect(["memory", "channels", "channel-memory", "checks", "slack"].map(phaseOf)).toEqual(["memory", "channels", "channels", "slack", "slack"]);
   });
 
   it("marks earlier steps done as later ones begin, and the running one as current", () => {
-    const channels = lines.findIndex((line) => line.includes('"channel-memory"'));
+    const channels = lines.findIndex((line) => line.includes('"channels"'));
     expect(states(lines.slice(0, channels + 1))).toEqual([
       { prepare: "done", memory: "done", channels: "running", slack: "pending" }, "channels",
     ]);

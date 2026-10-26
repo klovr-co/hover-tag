@@ -41,9 +41,7 @@ MCP_TOOL_NAMES = frozenset({
     "browser_click", "browser_take_screenshot",
 })
 COMMAND_LABELS = {
-    "mfs_search.py": "Searching connected knowledge…",
-    "mfs_cat.py": "Reading connected knowledge…",
-    "mfs_ls.py": "Browsing connected knowledge…",
+    "slack_search.py": "Searching Slack…",
     "slack_canvas.py": "Creating a Slack canvas…",
     "slack_post_message.py": "Posting to Slack…",
     "slack_thread_file.py": "Opening an earlier attachment…",

@@ -8,7 +8,7 @@ description: Help install Tag, connect it to Slack through guided setup, resume 
 Guide the user from an existing Codex installation to a working Tag in Slack.
 Use Tag's installer and installed `tag` CLI for all setup and service operations.
 This skill contains no runtime implementation. Do not launch bridge Python
-scripts directly or manually build an MFS connector for initial onboarding.
+scripts directly for initial onboarding.
 
 ## Talk like a person
 
@@ -34,7 +34,7 @@ what you say to the user should be plain and short.
 | authorization ticket, `/slackauthticket` | a one-time sign-in line from Slack |
 | Agent messaging, legacy Assistant experience | Slack's chat feature for the app |
 | App ID | the app's ID, shown in Slack's app settings |
-| MFS, index sync, App Server | Tag's search of your messages (only if asked) |
+| live search, `assistant.search.context`, App Server | Tag's search of your messages (only if asked) |
 | `first_reply: not_verified` | I haven't seen Tag answer in Slack yet |
 
 - When something fails, say what happened, what it means for them, and the one
@@ -243,8 +243,7 @@ selected-channel policy; preserve it unless the user requests a change.
 
 Setup saves completed answers; rerunning it resumes. Use `tag setup --review`
 only when the user wants to revisit choices. `tag setup --no-start` saves choices
-without starting services or indexing. `tag setup --test` (not combinable with `--step`) implies `--no-start`
-and requires a separate MFS server before you run `tag start`. This is not a
+without starting services. `tag setup --test` (not combinable with `--step`) implies `--no-start`. This is not a
 Slack sandbox: approved Slack actions remain real and CLI sign-ins are shared.
 
 To add another Tag, in the same or another Slack workspace, run `tag add`. The
@@ -271,8 +270,7 @@ tag status --json
 ```
 
 Successful setup normally starts Tag. If configuration is complete but services
-are stopped, use `tag start`, then check status. Tag manages its local MFS service;
-do not launch a competing MFS instance. Keep Codex as the backend unless the
+are stopped, use `tag start`, then check status. Keep Codex as the backend unless the
 user requests another supported backend. Its default transport is App Server;
 do not configure legacy `codex exec` transport as part of ordinary onboarding.
 

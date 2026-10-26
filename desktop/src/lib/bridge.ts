@@ -17,6 +17,8 @@ import type { RuleBackend } from "./permissions";
 import type { ActivityItem } from "./home";
 import { windowFitter } from "./fit";
 import { DEMO_ROUTINE_REFERENCE, demoRoutines } from "./routines";
+import { demoKnowledge } from "./knowledge";
+import { demoTransfer } from "./transfer";
 
 export interface AppInfo {
   platform: "macos" | "windows" | "linux" | string;
@@ -61,8 +63,7 @@ export interface Bridge {
   setup(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
   /** `tag ARGS --json` for a command that reports progress as it goes, such as start. */
   follow(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
-  /** `skipMemoryModel` skips the built-in search-model download for people who will use their own. */
-  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void, options?: { skipMemoryModel?: boolean }): Promise<Session>;
+  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void): Promise<Session>;
   copy(text: string): Promise<void>;
   paste(): Promise<string>;
   open(target: string): Promise<void>;
@@ -85,6 +86,10 @@ export interface Bridge {
   installAppUpdate(version: string): Promise<void>;
   /** Choose a picture file; Tag checks it. Null when the person cancels. */
   pickImage(): Promise<string | null>;
+  /** Choose a file to open, such as a Tag export. Null when the person cancels. */
+  pickFile(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
+  /** Choose where to save a new file. Null when the person cancels. */
+  saveFile(defaultName: string, filters: { name: string; extensions: string[] }[]): Promise<string | null>;
   /** Files dropped on the window, while `over` reports a drag above it. */
   onFileDrop(handler: (paths: string[]) => void, over?: (dragging: boolean) => void): () => void;
 }
@@ -129,8 +134,8 @@ async function tauriBridge(): Promise<Bridge> {
     setup: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
     // The same streamed `tag ARGS --json` session as setup; start never reads input.
     follow: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
-    install: (channel, onLine, onExit, options) =>
-      stream("install_start", { channel, skipMemoryModel: !!options?.skipMemoryModel }, onLine, (code) => onExit(code)),
+    install: (channel, onLine, onExit) =>
+      stream("install_start", { channel }, onLine, (code) => onExit(code)),
     copy: (text) => clipboard.writeText(text),
     paste: async () => (await clipboard.readText()) ?? "",
     open: (target) => (/^[a-z]+:/i.test(target) ? opener.openUrl(target) : opener.openPath(target)),
@@ -165,6 +170,15 @@ async function tauriBridge(): Promise<Bridge> {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const picked = await open({ multiple: false, directory: false, filters: [{ name: "Pictures", extensions: ["png", "jpg", "jpeg", "gif"] }] });
       return typeof picked === "string" ? picked : null;
+    },
+    pickFile: async (filters) => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({ multiple: false, directory: false, filters });
+      return typeof picked === "string" ? picked : null;
+    },
+    saveFile: async (defaultName, filters) => {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      return (await save({ defaultPath: defaultName, filters })) ?? null;
     },
     onFileDrop: (handler, over) => {
       const stop = import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
@@ -229,14 +243,6 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   const updateDemo = new URLSearchParams(location.search).get("update");
   const targetVersion = updateDemo ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
-  let memoryRunning = true;
-  let embedding = "onnx";
-  // ?download=1 shows the built-in model downloading in the background; ?download=failed shows it stopped.
-  const downloadDemo = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("download");
-  let downloadState: "downloading" | "failed" | "ready" | null = downloadDemo === "failed" ? "failed" : downloadDemo ? "downloading" : null;
-  let downloaded = 0.18;
-  let embeddingModel = "";
-  let embeddingUrl = "";
   // ?api=1 starts with one Tag already using its own API.
   const apiDemo: ApiConnection[] = typeof location !== "undefined" && new URLSearchParams(location.search).get("api") ? [{
     tag: rows[0].id, tag_name: rows[0].slack_name ?? "Tag", backend: "codex", kind: "openai", kind_name: "OpenAI-compatible",
@@ -247,6 +253,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let telemetry = new URLSearchParams(location.search).get("telemetry") === "ask" ? "not_set" : "on";
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
   const routines = demoRoutines();
+  const knowledge = demoKnowledge();
   // The sample routine's runs appear in its Tag's Activity, labelled with the routine.
   activity[rows[0].id].push(...routines.activity);
   return {
@@ -286,7 +293,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines", "knowledge", "knowledge-add", "tag-export"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -352,29 +359,6 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           return json({ schema_version: 1, ok: true, permissions: next, restart_required: running && !restart, restarted: restart });
         }
       }
-      if (first === "memory") {
-        if (second === "start" || second === "stop") memoryRunning = second === "start";
-        if (second === "embedding") {
-          embedding = args[2] === "local" ? "onnx" : "custom";
-          if (embedding === "custom") { embeddingModel = args[args.indexOf("--embedding-model") + 1]; embeddingUrl = args[args.indexOf("--base-url") + 1]; }
-        }
-        if (second === "download") { downloadState = "downloading"; downloaded = 0.02; }
-        if (downloadState === "downloading" && second === "status") {
-          downloaded = Math.min(1, downloaded + 0.12);
-          if (downloaded >= 1) downloadState = "ready";
-        }
-        const bytes = 560 * 1048576;
-        const download = downloadState && embedding === "onnx" ? {
-          state: downloadState, model: "gpahal/bge-m3-onnx-int8", done: Math.round(bytes * downloaded), total: bytes,
-          percent: downloadState === "ready" ? 100 : Math.floor(downloaded * 100), error: downloadState === "failed" ? "no network" : "",
-          message: downloadState === "failed" ? "The search model download failed: no network. Search is off; run tag memory download to retry." : "" } : null;
-        return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
-          keep_running: keepRunning, embedding: { provider: embedding === "onnx" ? "onnx" : "openai", model: embeddingModel, local: embedding === "onnx", current: embedding, download,
-            choices: [
-              { id: "onnx", label: "Default", detail: "On this computer. Private, offline, 560 MB.", custom: false, model: "", base_url: "", key_saved: false },
-              { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint.",
-                custom: true, model: embeddingModel, base_url: embeddingUrl, key_saved: false }] } });
-      }
       if (first === "autostart") {
         if (second === "on" || second === "off") keepRunning = second === "on";
         return json({ schema_version: 1, enabled: keepRunning, mechanism: "launchd",
@@ -417,7 +401,18 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         return json({ schema_version: 1, tag: row.id, services: {
           slack: ["Open Tag is live as @" + (row.slack_name ?? "Tag"),
             ...(row === rows[0] ? [`ERROR Routine r-3f9a1c2e7b failed [${DEMO_ROUTINE_REFERENCE}]: rate_limit: usage limit reached`] : [])],
-          mfs: ["Memory server ready"] }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
+        }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
+      }
+      if (first === "import" || (row && second === "export")) {
+        const answer = demoTransfer(args, rows);
+        if (first === "import" && !rows.some((r) => r.id === "mayas-tag-2")) {
+          rows.push({ ...structuredClone(rows[0]), id: "mayas-tag-2", state: "setup_incomplete", has_app: false, keep_running: false, channels: [] });
+        }
+        return json(answer);
+      }
+      if (row && second === "knowledge") {
+        const result = knowledge(args.slice(2));
+        return { code: result.ok ? 0 : 1, stdout: JSON.stringify({ schema_version: 1, tag: row.id, ...result }), stderr: "" };
       }
       if (row && second === "routine") {
         const result = routines(row.id, row === rows[0], row.state === "running", args.slice(2));
@@ -512,6 +507,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     checkAppUpdate: async () => desktopVersion !== targetVersion && updateDemo !== "preparing" ? { version: targetVersion } : null,
     installAppUpdate: async () => { desktopVersion = targetVersion; await sleep(1500); },
     pickImage: async () => null,
+    pickFile: async () => "/Users/maya/Downloads/mayas-tag-2026-10-26.hovertag",
+    saveFile: async (name) => `/Users/maya/Downloads/${name}`,
     onFileDrop: () => () => {},
   };
 }

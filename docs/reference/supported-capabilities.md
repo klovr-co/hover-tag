@@ -44,14 +44,15 @@ unavailable behavior.
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Search allowed MFS scopes | Implemented | `MFS_ALLOWED_SCOPES` limits the bundled search helper. |
-| Reopen precise MFS records | Implemented | Read and list helpers enforce the configured roots. |
-| Use indexed Slack channel history | Implemented | Requires a configured MFS Slack connector and an allowed `slack://` root. |
-| Use repositories, documents, issues, databases, and object stores | Connector-dependent | The source must already be indexed by MFS and permitted to Tag. |
+| Search the current conversation | Implemented | Read live with `conversations.history` and `replies`, threads included. Nothing is stored. |
+| Search other channels the person names | Implemented | Public or private, when both the person and the Tag are members. The bridge grants the channels; the helper refuses others. |
+| Search all public channels | Implemented, when asked | Slack's Real-time Search (`assistant.search.context`) with bot scope `search:read.public` and the event's `action_token`. Only on requests from Slack, not for guests, about 10 searches a minute. See [ADR 0012](../adr/0012-live-slack-search.md). |
+| Search private channels and DMs the Tag isn't in | Not provided | Slack's search for those needs a personal user token; Tag uses only its bot connection. |
+| Use repositories, documents, issues, databases, and object stores | Tool-dependent | Through the agent's own tools and connected accounts, not through Tag. |
 | Remember facts on request | Implemented | Explicit save, change, and forget for the current channel or, when asked, all channels. Saved facts load before every request in that channel. Codex and Claude use the same store and helper. |
 | Report memory changes | Implemented | Verified saves, changes, and forgets are added to the Slack reply from the store's receipts, including when the run fails. |
 | Provider-native memory | Disabled | Tag turns off Claude auto memory and Codex memories so that every remembered fact can be listed, corrected, and forgotten through Tag. |
-| Automatically remember every conversation | Not provided | Continuity comes from Slack threads, workspace state, saved memory, and approved indexed sources. |
+| Automatically remember every conversation | Not provided | Continuity comes from Slack threads, workspace state, saved memory, and live Slack search. |
 
 ## Operator controls
 
@@ -60,7 +61,6 @@ unavailable behavior.
 | Owner access | Supported | Setup makes the person signed in to Slack the owner. |
 | Multi-user access | Coming soon | Additional callers are not part of the supported product flow yet, although the underlying allowlist accepts multiple IDs. |
 | Explicit channel restriction | Implemented | Configure `SLACK_CHANNEL_IDS`; the bridge fails closed without selected channels. A Tag that follows invitations may start with none and picks up channels it's invited to. |
-| MFS retrieval roots | Implemented | Configure `MFS_ALLOWED_SCOPES`. |
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
 | Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Remaining requests show private choices to the requester, such as **Allow once**, **Allow for this task**, **Deny** and **Deny and stop**, plus proposed persistent rules that need confirmation. Confirmed rules go to the Tag workspace's `.codex/rules/tag.rules`, not your own `$CODEX_HOME/rules/default.rules`; a Tag working in a folder of yours offers no saved rule. Auto-review denials offer **Approve retry** / **Dismiss**. See [Control your Tag](../concepts/control-your-tag.md#respond-to-a-codex-approval-request). |
 | Claude action approvals | Implemented | SDK permission requests offer private **Allow once**, **Deny**, and **Deny and stop**. When Claude suggests an allow rule or folder, Tag also offers **Allow for this task** (session scope) and **Always allow**; plain shell commands also offer **Always allow this prefix**. Saved choices go to the Tag workspace's `.claude/settings.local.json` after confirmation. Claude has no automatic-review denial retry; missing approval channels and unanswered requests are denied. |

@@ -48,10 +48,9 @@ path is respected, and edits to existing files stay in place. Older files remain
 where they were saved; Tag does not guess which channel owns them.
 
 > [!NOTE]
-> Files saved in the workspace are not automatically indexed. However, Tag can
-> still locate and read them using a filename you mention or one already in the
-> conversation. See [What Tag knows](what-tag-knows.md) for how indexed search
-> works.
+> Files saved in the workspace are not indexed. Tag locates and reads them
+> using a filename you mention or one already in the conversation. See
+> [What Tag knows](what-tag-knows.md) for what else Tag can search.
 
 ## Also attach saved files in Slack
 

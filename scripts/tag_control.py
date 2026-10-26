@@ -15,13 +15,10 @@ try:
     import tag_config as settings
     import slack_channels
     import setup_ui as ui
-    import tag_slack_backoff
-    import tag_model_download
-    from tag_paths import default_workspace, tag_home
+    from tag_paths import default_workspace
 except ImportError:
     from scripts import agent_models, slack_channels, tag_config as settings, setup_ui as ui
-    from scripts import tag_slack_backoff, tag_model_download
-    from scripts.tag_paths import default_workspace, tag_home
+    from scripts.tag_paths import default_workspace
 
 
 def target_detail(values: dict[str, str], tag_id: str = "default", *, suffix: str = "") -> str:
@@ -50,13 +47,10 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
     backend = values.get("OPENTAG_BACKEND", "codex")
     search_path = str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", "")
     installed = backend in {"codex", "claude"} and shutil.which(backend, path=search_path) is not None
-    mfs_installed = lifecycle.mfs_server_executable() is not None
-    services = {"mfs": None, "slack": None}
+    services = {"slack": None}
     managed = False
     dependency_error = None
     if not offline:
-        if not settings.validation_error("MFS_URL", values.get("MFS_URL", settings.DEFAULTS["MFS_URL"])):
-            services["mfs"] = lifecycle.healthy(values.get("MFS_URL", settings.DEFAULTS["MFS_URL"]))
         try:
             services["slack"] = lifecycle.slack_ready(home)
             managed = lifecycle.process_for(home / "state/slack.json") is not None
@@ -68,7 +62,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
         state, action = "not_configured", "setup"
     elif errors:
         state, action = "setup_incomplete", "setup"
-    elif dependency_error or not installed or (not offline and not mfs_installed and not services["mfs"]):
+    elif dependency_error or not installed:
         state, action = "needs_attention", "doctor"
     elif offline:
         state, action = "configured", "inspect"
@@ -82,21 +76,14 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
     if memory_sync["policy"] == "invited":
         try:
             sync = json.loads((home / "state/slack-memory.json").read_text(encoding="utf-8"))
-            allowed = {"syncing", "sync_requested", "no_joined_channels", "settings_changed", "needs_attention"}
+            allowed = {"ready", "no_joined_channels", "settings_changed", "needs_attention"}
             memory_sync["state"] = sync["state"] if sync["state"] in allowed and 0 <= time.time() - sync["checked_at"] < 600 else "stale"
-            if sync.get("check") in {"membership", "history_access", "index_submission", "mfs_slack_connector"}:
+            if sync.get("check") == "membership":
                 memory_sync["check"] = sync["check"]
         except (OSError, ValueError, KeyError, TypeError):
             pass
         if memory_sync["state"] in {"needs_attention", "settings_changed", "stale"} and state == "running":
             state, action = "needs_attention", "status"
-    if services["mfs"] and lifecycle.local_mfs_endpoint(values.get("MFS_URL", settings.DEFAULTS["MFS_URL"])):
-        retry_at = tag_slack_backoff.cooldown(
-            tag_home() / "shared/mfs/slack-cooldowns-v1", values.get("SLACK_TEAM_ID", "")
-        )
-        if retry_at > time.time():
-            memory_sync.update(state="rate_limited", retry_at=retry_at,
-                               retry_in_seconds=max(1, int(retry_at - time.time())))
     return {
         "schema_version": 1, "tag": tag_id, "state": state,
         "next_command": tag_command(tag_id, action),
@@ -110,7 +97,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
                     "default_model": values.get("OPENTAG_DEFAULT_MODEL") or backend,
                     "offered": agent_models.allowed_backends(backend)},
         "services": services, "managed_process_running": managed,
-        "runtime": {"mfs_executable_found": mfs_installed, "error": dependency_error},
+        "runtime": {"error": dependency_error},
         "first_reply": "not_verified",
         "memory_sync": memory_sync,
         "slack_workspace": values.get("SLACK_TEAM_ID") or None,
@@ -146,7 +133,7 @@ def show_status(report: dict) -> None:
     services = report["services"]
     backend = report["backend"]
     ui.display.summary(report["state"], report["next_command"],
-                       slack=services.get("slack"), memory=services.get("mfs"),
+                       slack=services.get("slack"),
                        backend=backend["selected"] if report["configuration"]["exists"] else None,
                        agent=(backend["status"], backend["ready"]) if "status" in backend else None,
                        model=agent_models.describe_model_choice(
@@ -162,10 +149,8 @@ def show_status(report: dict) -> None:
         report.get("slack_app") or "",
         report.get("slack_app_name") or "",
     ))
-    if report.get("memory_sync", {}).get("state") == "rate_limited":
-        ui.message(f"Indexing paused by Slack; retrying in {report['memory_sync']['retry_in_seconds']} seconds.")
-    elif report.get("memory_sync", {}).get("policy") == "invited":
-        print("  Invitation memory: " + report["memory_sync"]["state"].replace("_", " "))
+    if report.get("memory_sync", {}).get("policy") == "invited":
+        print("  Invited channels: " + report["memory_sync"]["state"].replace("_", " "))
     print("  First reply: not verified by this status check.")
 
 
@@ -193,8 +178,6 @@ def show_inspection(report: dict) -> None:
     ui.display.section("Runtime")
     if report["runtime"]["error"]:
         ui.display.info_row("Dependencies", report["runtime"]["error"], good=False)
-    if not report["runtime"]["mfs_executable_found"] and not report["services"]["mfs"]:
-        ui.display.info_row("Memory", "Runtime not found beside Tag's Python", good=False)
     backend = report["backend"]
     ui.display.info_row(
         "Agent",
@@ -202,9 +185,7 @@ def show_inspection(report: dict) -> None:
         f"{'executable found' if backend['executable_found'] else 'not found'} · sign-in not checked",
         good=backend["executable_found"],
     )
-    if report.get("memory_sync", {}).get("state") == "rate_limited":
-        ui.message(f"Indexing paused by Slack; retrying in {report['memory_sync']['retry_in_seconds']} seconds.")
-    elif report.get("memory_sync", {}).get("policy") == "invited":
+    if report.get("memory_sync", {}).get("policy") == "invited":
         ui.display.info_row("Invitations", report["memory_sync"]["state"].replace("_", " "))
     ui.display.next_action("Recommended next step", report["next_command"])
 
@@ -326,64 +307,9 @@ def choose_default_model(home: Path, values: dict[str, str]) -> str | None:
     return values_only[choice] if choice < len(choices) else None
 
 
-def _embedding_choices():
-    try:
-        import tag_embedding
-        from tag_paths import tag_home
-    except ImportError:
-        from scripts import tag_embedding
-        from scripts.tag_paths import tag_home
-    shared = tag_home() / "shared/mfs"
-    return tag_embedding, shared
-
-
-def _search_model_label() -> str:
-    tag_embedding, shared = _embedding_choices()
-    current = tag_embedding.current_provider(shared)
-    label = next((str(c["label"]) for c in tag_embedding.choices(shared) if c["id"] == current), current)
-    download = tag_model_download.report(shared) if current == tag_embedding.LOCAL else None
-    if download and download["state"] == "downloading":
-        return f"{label} (downloading {download['percent']}%, search off)"
-    return label
-
-
-def _choose_search_model() -> None:
-    """Pick how memory computes search embeddings; `tag memory embedding` does the work."""
-    tag_embedding, shared = _embedding_choices()
-    options = tag_embedding.choices(shared)
-    ui.message("Switching builds a new index: memory indexes your Slack channels again with the new model.")
-    chosen = ui.choose("Search model", [f"{c['label']} · {c['detail']}" for c in options] + ["Cancel"])
-    if chosen >= len(options):
-        return
-    picked = options[chosen]
-    arguments, key = [], ""
-    if picked["custom"]:
-        example = "https://api.openai.com/v1 or http://localhost:11434/v1"
-        url = input(f"Endpoint address ({example}) [{picked['base_url']}]: ").strip() or str(picked["base_url"])
-        model = input(f"Embedding model name [{picked['model']}]: ").strip() or str(picked["model"])
-        key = getpass.getpass("API key (optional; Enter to keep a saved key or use none): ").strip()
-        arguments = ["--base-url", url, "--embedding-model", model]
-    if ui.choose("Switch the search model?", ["Switch and re-index", "Cancel"]) != 0:
-        return
-    command = [sys.executable, str(Path(__file__).with_name("tag_cli.py")), "memory", "embedding",
-               "custom" if picked["custom"] else "local", *arguments, *(["--stdin"] if picked["custom"] else []), "--json"]
-    # The key goes over stdin only, never into the command line.
-    completed = subprocess.run(command, input=key + "\n" if picked["custom"] else None, text=True, capture_output=True, check=False)
-    try:
-        report = json.loads(completed.stdout.strip().splitlines()[-1]) if completed.stdout.strip() else {}
-    except ValueError:
-        report = {}
-    if completed.returncode or report.get("ok") is False:
-        lines = completed.stderr.strip().splitlines()
-        ui.message(report.get("error") or (lines[-1] if lines else "Couldn't change the search model."))
-        return
-    ui.message(report.get("note") or ("Memory restarted and is indexing your Slack channels again." if report.get("reindexing") else "Saved."))
-
-
 def _settings_menu(home: Path, ai=None) -> None:
     groups = (
         ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "SLACK_CHANNEL_POLICY", "SLACK_ALLOWED_BOT_IDS", "change_app", "reconnect")),
-        ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN", "memory_model", "MFS_CHANNEL_SCOPES")),
         ("AI & models", ("OPENTAG_DEFAULT_MODEL",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
                       "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING",
@@ -427,25 +353,21 @@ def _settings_menu(home: Path, ai=None) -> None:
                 f"{slack_channels.channel_label(raw_values['SLACK_BOT_TOKEN'], channel_id)} ({channel_id})"
             )
         ui.display.header("Settings / " + name, target_detail(raw_values, tag_id))
-        if selection == "2":
-            ui.message(f"Workspace: {home / 'workspace'} (managed by Tag)")
-            ui.message("Memory uses sources already indexed in MFS; changing scopes does not index a source.")
-        if selection == "3" and ai is not None:
+        if selection == "2" and ai is not None:
             try:
                 import tag_ai
             except ImportError:
                 from scripts import tag_ai
             tag_ai.settings_menu(ai)
             continue
-        if selection == "3":
+        if selection == "2":
             ui.message("Choose a model from your connected Codex and Claude accounts.")
             value = choose_default_model(home, raw_values)
             if value is not None:
                 settings.update_config(settings.config_path(home), {"OPENTAG_DEFAULT_MODEL": value})
                 ui.message("Saved. Restart Tag to apply the default model.")
             continue
-        actions = {"change_app": "Change Slack app or workspace", "reconnect": "Reconnect credentials with Slack CLI",
-                   "memory_model": "Search model: " + _search_model_label()}
+        actions = {"change_app": "Change Slack app or workspace", "reconnect": "Reconnect credentials with Slack CLI"}
         labels = [actions.get(key, f"{settings.LABELS.get(key, key)}: {values.get(key, 'not set')}") for key in keys]
         if ui.keyboard_available():
             choice = ui.choose("Choose a setting", labels + ["Back"])
@@ -458,16 +380,13 @@ def _settings_menu(home: Path, ai=None) -> None:
             continue
         key = keys[int(selection) - 1]
         try:
-            if key == "memory_model":
-                _choose_search_model()
-                continue
-            if key in {"change_app", "reconnect", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_IDS", "MFS_SLACK_HISTORY_DAYS", "SLACK_CHANNEL_POLICY"}:
+            if key in {"change_app", "reconnect", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_IDS", "SLACK_CHANNEL_POLICY"}:
                 try:
                     from . import tag_reconfigure
                 except ImportError:
                     import tag_reconfigure
                 kind = {"change_app": "app", "reconnect": "credentials", "SLACK_APP_TOKEN": "credentials", "SLACK_BOT_TOKEN": "credentials", "SLACK_CHANNEL_IDS": "channels",
-                        "MFS_SLACK_HISTORY_DAYS": "history", "SLACK_CHANNEL_POLICY": "policy"}[key]
+                        "SLACK_CHANNEL_POLICY": "policy"}[key]
                 tag_reconfigure.edit(home, kind)
                 continue
             else:

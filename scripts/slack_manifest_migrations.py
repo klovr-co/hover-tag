@@ -23,23 +23,23 @@ try:
     import slack_channels
     import slack_credentials
     import tag_config as settings
-    import tag_credentials
 except ImportError:
     from scripts import slack_identity, slack_channels, slack_app_create, slack_credentials, tag_config as settings
-    from scripts import tag_credentials
 
 
 ROOT = Path(__file__).resolve().parents[1]
 # 4: team:read, so Tag.app can show the Slack workspace icon.
 # 5: member_joined_channel, so Tag notices an invitation at once.
-MIGRATION_VERSION = 5
+# 6: search:read.public, so Tag can search public channels live (Real-Time Search).
+MIGRATION_VERSION = 6
 DM_SCOPE = "im:history"
 REQUIRED_MANIFEST = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8"))
 REQUIRED_BOT_SCOPES = tuple(REQUIRED_MANIFEST["oauth_config"]["scopes"]["bot"])
 # Requested like the others, but never worth stopping a start for: team:read only
-# shows the workspace icon. If Slack (or an admin) hasn't granted it yet, Tag starts
-# anyway and asks again at most once a day.
-OPTIONAL_BOT_SCOPES = frozenset({"team:read"})
+# shows the workspace icon, and without search:read.public Tag still searches its own
+# channels. If Slack (or an admin) hasn't granted one yet, Tag starts anyway and asks
+# again at most once a day.
+OPTIONAL_BOT_SCOPES = frozenset({"team:read", "search:read.public"})
 NEEDED_BOT_SCOPES = tuple(scope for scope in REQUIRED_BOT_SCOPES if scope not in OPTIONAL_BOT_SCOPES)
 OPTIONAL_RETRY = timedelta(hours=24)
 OPTIONAL_KEYS = {"optional_pending", "optional_checked_at", "optional_error"}
@@ -502,43 +502,8 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
 
 
 def _save_credentials(home: Path, config_path: Path, credentials: dict[str, str]) -> None:
-    """Save fresh tokens, and the history credential too when it was a copy of the bot token.
-
-    Setup uses the bot token for Slack history unless the person gives another
-    credential. A reinstall revokes the old bot token, so that copy must follow it.
-    """
-    changes = dict(credentials)
-    current = settings.read_config(config_path)
-    if current.get("MFS_SLACK_TOKEN") and current.get("MFS_SLACK_TOKEN") == current.get("SLACK_BOT_TOKEN"):
-        tag_credentials.write_slack_history(home, credentials["SLACK_BOT_TOKEN"])
-        changes["MFS_SLACK_TOKEN"] = credentials["SLACK_BOT_TOKEN"]
-    settings.update_config(config_path, changes)
-
-
-def repair_history_credential(home: Path, config_path: Path, values: dict[str, str]) -> bool:
-    """Replace a history credential left behind by an earlier reinstall.
-
-    Before the history credential followed bot token renewals, a reinstall left
-    it holding the revoked bot token. When it is a bot token Slack rejects and
-    the current bot token works, use the current one. Returns whether it changed.
-    """
-    history, bot = values.get("MFS_SLACK_TOKEN", ""), values.get("SLACK_BOT_TOKEN", "")
-    if not history.startswith("xoxb-") or not bot or history == bot:
-        return False
-    try:
-        granted_bot_scopes(history)
-        return False
-    except BotTokenRejected:
-        pass
-    except RuntimeError:
-        return False  # Slack couldn't say; leave the person's credential alone.
-    try:
-        granted_bot_scopes(bot)
-    except RuntimeError:
-        return False
-    tag_credentials.write_slack_history(home, bot)
-    settings.update_config(config_path, {"MFS_SLACK_TOKEN": bot})
-    return True
+    """Save fresh tokens from a reinstall."""
+    settings.update_config(config_path, dict(credentials))
 
 
 def _receive(project: Path, team_id: str, app_id: str, enterprise_id: str) -> dict[str, str]:

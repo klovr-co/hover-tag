@@ -1,6 +1,7 @@
 # ADR 0002: Verify identity and readiness for local services
 
-- Status: Accepted
+- Status: Accepted; the shared MFS service it describes was removed by
+  [ADR 0012](0012-live-slack-search.md)
 - Date: 2026-09-18
 
 ## Context

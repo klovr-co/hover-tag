@@ -135,7 +135,7 @@ describe("install progress", () => {
   it("advances, records the version and command, and finishes", () => {
     let state = initialInstall;
     for (const line of lines) state = installReducer(state, { type: "line", line });
-    expect(state).toMatchObject({ version: "0.2.0", command: "/Users/maya/.local/bin/tag", current: 5 });
+    expect(state).toMatchObject({ version: "0.2.0", command: "/Users/maya/.local/bin/tag", current: 4 });
     state = installReducer(state, { type: "exit", code: 0 });
     expect(state.finished).toBe(true);
     expect(fraction(state, 0)).toBe(1);
@@ -217,18 +217,18 @@ describe("log repeats", () => {
   });
 });
 
-describe("memory and Keep Tags running", () => {
-  it("says the setting also keeps memory running", () => {
-    expect(KEEP_RUNNING_DETAIL).toContain("memory");
+describe("Keep Tags running and the install steps", () => {
+  it("no longer mentions a memory service to keep running", () => {
+    expect(KEEP_RUNNING_DETAIL).not.toContain("memory");
   });
 
-  it("tells people memory is restarted for them when Keep Tags running is on", () => {
+  it("has no memory service problem to explain", () => {
     const row = { id: "a", services: { mfs: false } } as Parameters<typeof problemHelp>[0];
-    expect(problemHelp(row, null)).toContain("Keep Tags running");
+    expect(problemHelp(row, null)).not.toContain("memory");
   });
 
-  it("says the search model downloads in the background rather than during the memory step", () => {
-    expect(INSTALL_STEPS.find((item) => item.step === "memory")?.detail).toContain("downloads in the background");
+  it("installs no search model, and the step weights still add up", () => {
+    expect(INSTALL_STEPS.map((item) => item.step)).not.toContain("memory");
     expect(INSTALL_STEPS.reduce((sum, item) => sum + item.weight, 0)).toBeCloseTo(1);
   });
 });

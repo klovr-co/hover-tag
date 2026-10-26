@@ -8,7 +8,7 @@ export type StepState = "pending" | "running" | "done" | "attention";
 /** What a person sees while a Tag starts, in order. */
 export const START_PHASES = [
   { id: "prepare", title: "Checking its Slack app" },
-  { id: "memory", title: "Starting memory" },
+  { id: "memory", title: "Preparing its memory" },
   { id: "channels", title: "Reading its channels" },
   { id: "slack", title: "Connecting to Slack" },
 ] as const;
@@ -30,7 +30,7 @@ export const initialStart = (): StartProgress => ({
 /** Tag's readiness rows, grouped into the phases above. Unknown rows are setup work. */
 export function phaseOf(step: string): Phase {
   if (step === "memory") return "memory";
-  if (step === "channel-memory") return "channels";
+  if (step === "channels" || step === "channel-memory") return "channels";
   if (step === "checks" || step === "slack") return "slack";
   return "prepare";
 }

@@ -1,7 +1,7 @@
 # Tag domain context
 
 Tag is a self-hosted bridge that lets authorized Slack users delegate work to
-a local coding-agent backend with optional MFS retrieval.
+a local coding-agent backend that searches Slack live when a request needs it.
 
 ## Glossary
 
@@ -16,16 +16,22 @@ a local coding-agent backend with optional MFS retrieval.
   and applies to all Slack requests to that Tag.
 - **AI connection** — one shared provider account for every Tag in an installation,
   managed in Settings. Model and thinking choices belong to each Tag.
-- **MFS scope** — an operator-configured URI root used by Tag's helper commands
-  to constrain normal list, read, and search operations.
-- **Required service** — local MFS or the Slack bridge. Tag is healthy only when
-  MFS answers its health check and the bridge has a live Socket Mode connection.
+- **Live search** — a Tag reading Slack when a request needs it: channels it is
+  a member of through `conversations.history` and `replies`, and public channels
+  through Slack's Real-time Search API when the person asks. Nothing it reads is
+  stored. See ADR 0012.
+- **Required service** — the Slack bridge. Tag is healthy only when the bridge
+  has a live Socket Mode connection.
 - **Managed process** — a service Tag started and may later stop after validating
   the PID, process start time, and expected command identity.
 - **Tag** — one local Slack identity, configuration, agent working folder,
   conversation state, and bridge lifecycle. Every Tag, including `default`,
   owns a working folder at `~/Tag/NAME` with private data in its `.tag` directory;
   implementation code calls this an instance.
+
+- **Knowledge** — what one Tag knows: its memory (markdown files people asked
+  it to remember, with a private history) and its skills. Each Tag has only
+  its own; Tags never share knowledge.
 
 - **Routine** — a saved prompt one Tag runs on a schedule and posts in one of
   its channels, approved by a person. Each Tag's bridge runs its own routines.
@@ -44,5 +50,6 @@ compatibility; they do not define a separate product name.
 - [Self-contained Tag folders](docs/adr/0007-self-contained-tag-folders.md)
 - [Login supervisor](docs/adr/0008-login-supervisor.md)
 - [Routines run in the bridge](docs/adr/0010-routines-run-in-the-bridge.md)
+- [Markdown memory with history](docs/adr/0011-markdown-memory-with-history.md)
 - [ChatGPT plan connection](docs/adr/0008-chatgpt-plan-connection.md)
 - [Claude Agent SDK transport](docs/adr/0008-claude-agent-sdk.md)

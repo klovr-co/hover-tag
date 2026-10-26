@@ -111,7 +111,7 @@ Use an isolated `TAG_HOME` for development. WSL uses the Linux layout.
 Tag keeps its working files and private data together in `~/Tag/NAME`.
 Each Tag is named after its Slack workspace and app IDs, for example
 `~/Tag/t0abc123-a0xyz789`. All Tags share installed releases,
-launchers, backend account authentication, and managed MFS.
+launchers, and backend account authentication.
 
 ```text
 ~/Tag/t0abc123-a0xyz789/             # everything owned by one Tag
@@ -133,8 +133,9 @@ launchers, backend account authentication, and managed MFS.
   current.json
   previous.json
   bin/
-  shared/mfs/
+  shared/
   state/
+    knowledge/<id>.git              # each Tag's private memory history
 ```
 
 Every Tag uses the same layout at `~/Tag/NAME`. `tag paths --json` reports
@@ -155,12 +156,13 @@ The hidden `.tag` folder contains secrets. Keep it when moving a Tag's working
 folder, and treat copies as private. Cloud syncing the folder also syncs those
 secrets. Owner-only permissions and Git exclusion do not prevent access by an
 agent running under the same account; see [the security policy](../../SECURITY.md).
-Global Codex/Claude sign-ins and the shared MFS index remain outside this folder.
+Global Codex/Claude sign-ins remain outside this folder. Each Tag's memory
+history lives under the installation's `state/knowledge/`; see
+[Memory](../../references/memory.md).
 
 Configuration is JSON on every platform and is never executed as shell code.
 POSIX installations create private directories; Windows uses the account's ACL.
-MFS retains its own existing data and authentication locations, as do external
-tools such as `gws`. The installer does not relocate their credentials.
+External tools such as `gws` keep their own data and authentication locations. The installer does not relocate their credentials.
 
 ## Run from source
 
@@ -181,8 +183,6 @@ migrations before startup readiness checks. For normal use, prefer the
 managed installer above so upgrades and runtime dependencies remain pinned.
 `./tag dev` starts the normal dependencies, watches Python source, reloads only
 the Slack bridge when files change, and shows bridge logs in the foreground.
-For a loopback `MFS_URL`, it owns the MFS process and Ctrl-C stops both services.
-A configured remote MFS endpoint remains externally managed.
 
 `./tag app` opens the desktop app from the same checkout, driving this checkout's CLI
 instead of an installed one. It needs Node 22 and a Rust toolchain, installs the
@@ -268,7 +268,7 @@ Use `tag status`, `tag logs`, and `tag stop`. Put `NAME` before the command to
 operate a named Tag, such as `tag personal status`; `tag list` shows all independent configurations. The dedicated `tag restart`
 command presents one operation and should be preferred to manually chaining
 stop and start. `tag autostart on` keeps wanted Tags running after login; see
-[Keeping Tags running](cli-operations.md#keeping-tags-running). A separately managed MFS server is reused and never stopped by TAG.
+[Keeping Tags running](cli-operations.md#keeping-tags-running).
 
 Run `tag upgrade` after the initial installation. It follows the saved channel,
 downloads and verifies the candidate, stages a separate runtime, atomically
@@ -282,8 +282,9 @@ install an older semantic version by default. A channel change is saved while
 Tag keeps the newer installed release until that channel catches up. An
 intentional older install requires `--allow-downgrade`; prefer `tag rollback`
 when returning to the immediately previous known-good release. `tag rollback`
-selects the previous release only after all Tag bridges and the
-installation-owned shared MFS service are stopped with `tag memory stop`.
+selects the previous release only after all Tag bridges are stopped. After the
+move to live Slack search, rolling back to a release that needs the old local
+index is refused; upgrade instead.
 
 Channel selection reads a public `tag-release-channels.json` index from the
 moving `channels` GitHub release, then downloads immutable numbered assets
@@ -375,84 +376,18 @@ Tag's working folder and `.tag` data. Native Linux builds require a compatible
 glibc distribution and wheels for the runtime packages; musl-only distributions
 are not qualified by this bootstrap.
 
-## Memory embedding model
+## Slack search
 
-Tag's memory server (MFS) embeds text with a built-in model by default
-(`gpahal/bge-m3-onnx-int8`, about 560 MB). The installer downloads it from
-`huggingface.co` into `${MFS_HOME:-~/.mfs}/onnx-cache`, so the computer needs
-outbound access to that host. The model stays the default.
+Tag installs no search model and runs no search server. A Tag searches Slack
+live with its own bot connection when a request needs it, and stores nothing it
+reads; see [ADR 0012](../adr/0012-live-slack-search.md).
 
-The download is not an install step: the installer starts `preload_mfs_model.py
---progress` as a detached background process after the release is in place, and
-finishes without waiting. The script records the model, bytes done and bytes in total
-in `shared/mfs/model-download.json` (`downloading`, `ready`, or `failed`, with its
-process ID; a download whose process is gone reads as interrupted). `tag memory status
---json` reports it as `embedding.download`, Tag.app shows it on Home and in Settings →
-AI, and `tag settings` shows it beside the search model. Memory search is not available
-until it finishes; `tag memory start` waits for a running download, and `tag memory
-download` starts it again. If it can't be started, the install still succeeds and MFS
-fetches the model itself the first time it starts. The log is `shared/mfs/model-download.log`.
-
-The installer skips the download when MFS will not use it:
-
-- The MFS server configuration (`$MFS_SERVER_CONFIG`, `./server.toml`,
-  `$MFS_HOME/server.toml`, or `~/.mfs/server.toml`) selects another embedding
-  provider, for example `provider = "openai"` under `[embedding]`.
-- You ask for it, for an install that chooses its provider later:
-  `./install.sh --skip-memory-model`, `install.ps1 -SkipMemoryModel`, or
-  `TAG_SKIP_MFS_MODEL=1` in the environment (all work with the curl installer).
-  Tag.app's second install screen, **Memory search**, has a **Your own endpoint** choice that does the same; it opens a third screen where you can set the endpoint up.
-
-The installer prints which one applied. A skipped model is not lost: if you later
-switch back to the Default, MFS downloads the model the first time it starts.
-An unreadable server configuration keeps the local default.
-
-### Choosing the search model after install
-
-The built-in model is called **Default**. To use another, open **Settings** →
-**AI** → **Search model** in Tag.app, or run `tag memory embedding custom` with
-the endpoint's address and the model's name:
-
-```sh
-# OpenAI (the key goes on stdin, never on the command line)
-echo "$OPENAI_API_KEY" | tag memory embedding custom --stdin \
-  --base-url https://api.openai.com/v1 --embedding-model text-embedding-3-small
-# Ollama: no key
-tag memory embedding custom --base-url http://localhost:11434/v1 --embedding-model nomic-embed-text
-# Back to the built-in Default
-tag memory embedding local
-```
-
-Any server that answers an OpenAI-style `POST /embeddings` works, including
-LM Studio, vLLM and gateways. The key is optional because local servers usually
-have none. `tag memory embedding status --json` shows the current choice and
-what is on offer. Before it saves anything, Tag embeds one word with your
-address, model and key, so a wrong key, an unknown model or an unreachable
-address is refused with a message and changes nothing; this also measures the
-model's vector size. Tag then:
-
-- writes its own copy of the MFS server configuration to
-  `shared/mfs/server.toml` under Tag's home, keeping your other settings and
-  never editing `~/.mfs/server.toml`, and records the choice (model, address,
-  vector size) in `shared/mfs/embedding.json`;
-- stores the key, if any, in a private file (`shared/mfs/credentials/`, mode
-  0600) and gives MFS the key and address through its environment
-  (`OPENAI_API_KEY` and `OPENAI_BASE_URL`), not its command line or the
-  configuration file;
-- restarts memory if it is running, and indexes your Slack channels again.
-
-MFS keeps a separate index for each vector size, so one model's index and
-another's never mix. Switching back reuses the old index, but until the new one
-is rebuilt, search results are partial. If memory isn't running, the re-index
-happens the next time `tag start` runs. Sources that are not the Slack
-connector are not re-indexed by Tag; add them again to MFS. A remote endpoint
-receives the text of the indexed messages; the Default and a local endpoint do
-not send it off your computer.
-
-MFS also supports Gemini, Voyage and Mistral embeddings, which need extra
-packages that Tag doesn't install; configure those in `server.toml` yourself. If
-you already use `~/.mfs/server.toml` or `OPENAI_API_KEY` yourself, nothing
-changes until you choose in Tag.
+Upgrading from a release with the local index removes each Tag's index
+settings, connector and history credential on the next `tag start`, after
+asking a running index server to drop every Tag's Slack copies. Tag leaves the
+index folder (`${MFS_HOME:-~/.mfs}`), which may hold other data, and `tag
+memory remove-old-index --yes` deletes Tag's files there. The old
+`--skip-memory-model` installer option is still accepted and does nothing.
 
 ## Measured installation size
 
@@ -460,7 +395,8 @@ Measured on macOS ARM64 on 2026-09-27, using Python 3.12.14, uv 0.12.19,
 Slack CLI 4.8.0 and the current runtime requirements. These are measurements,
 not size limits or promises for other platforms. Transitive package updates,
 platform wheels, filesystem allocation, and existing caches change the totals.
-Since this measurement, Tag no longer installs the MFS CLI (about 2 MB less).
+Since this measurement, Tag no longer installs the MFS CLI (about 2 MB less),
+the memory server package and its dependencies, or the embedding model.
 
 | Component | Download payload | Installed logical bytes |
 | --- | ---: | ---: |
@@ -476,7 +412,9 @@ Since this measurement, Tag no longer installs the MFS CLI (about 2 MB less).
 A later install on Linux x86-64 measured **1.8 GB** in total: 977 MB for the
 release environment, 186 MB for the managed Python, and 560 MB for the model in
 `~/.mfs`, plus up to 1 GB of uv package cache while installing. Without the
-model (see above) the total is about 1.2 GB. The user guide quotes the 1.8 GB.
+model (see above) the total is about 1.2 GB. Tag no longer downloads the model,
+so the user guide quotes 1.2 GB; without the memory server's packages the
+release environment is smaller still, but that hasn't been measured yet.
 
 The dependency payload is approximately 797 MiB before the Tag runtime archive,
 index metadata, HTTP overhead, or retries. The first installed Tag home measured
@@ -528,7 +466,5 @@ old releases or alter operator data.
 For the measured checkout, the archive fell from 6,603,360 bytes (196 files) to
 approximately 280 KB (74 files), about a 96% reduction. This is a reduction in the
 Tag archive, not in the Python packages or embedding model described above.
-MFS 0.4.6 declares `markitdown[all]` as a required dependency, including document,
-audio, and other converters. The installer keeps that supported dependency set;
-trimming it requires a narrower upstream package and capability testing, rather
-than omitting declared dependencies or installing with `--no-deps`.
+Tag no longer depends on the memory server package, so its document and audio
+converters are no longer installed.

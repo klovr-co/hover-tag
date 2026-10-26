@@ -77,10 +77,8 @@ running**.
 - [ ] A computer that can stay awake and online while Tag answers: macOS 12 or
   later or 64-bit Linux with a desktop for the desktop app. The terminal
   installer also supports Windows 10 or 11 and Linux without a desktop.
-- [ ] About 1.8 GB of free disk space. A measured install used 1.8 GB: about
-  1 GB for Tag's runtime and packages, and 560 MB for the local
-  [memory model](reference/installation-details.md#memory-embedding-model).
-  The installer also needs up to 1 GB of temporary package cache.
+- [ ] About 1.2 GB of free disk space for Tag's runtime and packages. The
+  installer also needs up to 1 GB of temporary package cache.
 - [ ] An AI account. Use Codex or Claude Code if you have one. You can also
   connect a [ChatGPT plan](reference/chatgpt-connection.md) or an
   [API key](reference/api-connections.md) during setup.
@@ -112,23 +110,14 @@ Then run `tag setup` and `tag start`. For install options, coding-agent setup,
 where files live, and running from source, see
 [Installation details](reference/installation-details.md).
 
-The installer starts downloading Tag's built-in memory model
-(`gpahal/bge-m3-onnx-int8`, about 560 MB) from `huggingface.co` in the background and
-finishes without waiting for it, so the computer needs outbound access to that host.
-Tag works meanwhile, but memory search isn't available until the download finishes.
-Tag.app shows the progress on Home, and `tag memory status` shows it in the terminal; if
-it stops, **Try again** or `tag memory download` restarts it. If your memory
-search uses your own embedding model, such as OpenAI or Ollama, skip the download:
-`./install.sh --skip-memory-model` (or `TAG_SKIP_MFS_MODEL=1 ./install.sh`; on
-Windows, `install.ps1 -SkipMemoryModel`). In Tag.app, choose **Your own endpoint** on the
-**Memory search** screen (after **Continue**) and give its address, model and key; the terminal installer asks the
-same question when you run it interactively. See
-[Memory embedding model](reference/installation-details.md#memory-embedding-model).
+Tag downloads no search model and runs no search server. A Tag searches Slack
+live when a request needs it, with its own Slack connection; see
+[What Tag knows](concepts/what-tag-knows.md#find-a-discussion).
 
 ### Keep Tag running on a server
 
 On Linux, `tag autostart on` registers a systemd user service that starts your
-Tags and the memory server (MFS) and restarts either if it stops. A user service
+Tags and restarts any that stop. A user service
 starts at boot, before anyone logs in, only if the account has *linger* turned
 on. `tag autostart on` tries to turn it on for you. If your system asks for an
 administrator, it prints the exact command to run, which is:
@@ -208,14 +197,15 @@ app unless you choose to delete it.
 To uninstall Tag completely:
 
 1. In the Tag app, click **Stop all** for each workspace. Then run
-   `tag autostart off` and `tag memory stop` in a terminal.
+   `tag autostart off` in a terminal.
 2. Quit the app and delete it. Drag it to the Trash.
 3. Remove the `tag` command from its folder.
 4. Back up anything you want to keep. Then delete Tag's files and each Tag's
    folder in `~/Tag`. See
    [Where Tag keeps files](reference/installation-details.md#where-tag-keeps-files).
 
-Your Codex and Claude settings and MFS data in `~/.mfs` stay in place. Slack
-apps stay in Slack until you delete them there.
+Your Codex and Claude settings stay in place. If you used an earlier release
+with a local Slack index, run `tag memory remove-old-index --yes` before
+uninstalling to delete it. Slack apps stay in Slack until you delete them there.
 
 If you reinstall later, your Tags come back.

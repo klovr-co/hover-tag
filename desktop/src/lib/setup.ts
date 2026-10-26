@@ -162,7 +162,7 @@ export function heading(question: SetupQuestion): [string, string] {
     case "workspace":
       return ["Which workspace?", "Pick the Slack workspace this Tag will work in."];
     case "channels":
-      return ["Where should Tag respond?", "Tag answers and remembers conversations in these channels."];
+      return ["Where should Tag respond?", "Tag answers in these channels."];
     case "approve_setup":
       return ["Ready to create Tag's Slack app?", "Continue to create and install it, or go back to change your choices."];
     case "create_app":

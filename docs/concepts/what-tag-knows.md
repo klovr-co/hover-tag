@@ -39,23 +39,33 @@ hours or when it grows too large. A fresh conversation reads one page of up to
 Tag can also reopen files shared earlier in the thread and images it made
 before. See [Use earlier files in a thread](workspaces-and-tools.md#use-earlier-files-in-a-thread).
 
-## Find a discussion in another channel
+## Find a discussion
 
 > **Iris:** @Iris's Tag find the launch decision in #product and compare it with
 > the plan in your workspace. Show me which messages support the decision.
 >
-> **Iris's Tag:** In the indexed #product thread, Maya wrote, "Let's move launch
-> to Monday so support has time to prepare." Jules replied, "I'll update the
-> checklist for Monday." The workspace plan still says Friday, so it conflicts
-> with those messages.
+> **Iris's Tag:** In #product, Maya wrote, "Let's move launch to Monday so
+> support has time to prepare." Jules replied, "I'll update the checklist for
+> Monday." The workspace plan still says Friday, so it conflicts with those
+> messages.
 
-Tag can search another channel's history when it has been indexed and made
-available by the person running Tag. Inviting the bot to a channel does not
-automatically make all its history searchable.
+Tag searches Slack live, when a request needs it, with the Tag's own Slack
+connection. It keeps no copy of what it reads, so results show Slack as it is
+now, edits and deletions included. There is nothing to import first and no
+separate sign-in.
 
-The same applies to other indexed sources, such as project documents and
-issues. A source may be missing or its index may be out of date. If Tag cannot
-find something, that alone does not mean the discussion never happened.
+- **This conversation.** By default Tag reads the channel or DM the request
+  came from, including its threads.
+- **Other channels you name.** Tag reads a channel you name in your request,
+  public or private, when both you and the Tag are members.
+- **All public channels.** Say so in your words, such as "search all channels",
+  and Tag also uses Slack's own search across public channels. Slack allows
+  this only for requests that come from Slack (an `@` mention or a DM), not for
+  guests, and about 10 searches a minute.
+
+Tag reads only what its Slack app may read. If Tag cannot find something, that
+alone does not mean the discussion never happened: it may be in a channel the
+Tag isn't in, or older than Tag looked.
 
 ## Ask Tag to remember something
 
@@ -83,9 +93,14 @@ You can also ask Tag:
 - "What do you remember?" to list what this channel can use.
 - "Change the deadline to Thursday." Tag keeps the old value in its history
   so the change can be undone. Say the old value was wrong or sensitive, and
-  Tag does not keep it.
-- "Forget the report deadline." Tag can no longer reach the entry, including
-  its history. The original Slack messages are not changed.
+  Tag removes it from its history too.
+- "Forget the report deadline." Tag can no longer reach the entry. Its private
+  history keeps it so the Tag's owner can restore it, unless you ask Tag to
+  forget it completely. The original Slack messages are not changed.
+
+Each Tag's memory is a set of plain markdown files that belong only to that
+Tag; Tags never share memory, even on one computer. Every change is kept in
+the Tag's private history, with who asked and the thread it came from.
 
 Anyone who can use Tag can save, change, or forget memory, and each reply says
 exactly what changed. Short facts are loaded with every request; longer
@@ -93,9 +108,9 @@ details are kept as notes that Tag reads when it needs them. Tag refuses a
 save that would make the always-loaded memory too large rather than dropping
 something silently.
 
-Tag does not save a note after every conversation. For a longer document, ask
-Tag to write it to a workspace file. To make that file searchable through MFS,
-the operator must include it in an indexed, permitted source.
+Tag does not save a note after every conversation, summarise threads into
+memory, or study sources on its own. For a longer document, ask Tag to write it
+to a workspace file.
 
 ## Get help from other Tags
 
@@ -139,12 +154,11 @@ and the Gmail skill available to the agent, you could ask:
 
 The skill explains how to use `gws`; the Google login determines which email
 it can access. Installing a skill alone does not grant access to an account.
-These tools use their own permissions, separately from the indexed-source
-settings.
+These tools use their own permissions, separately from Tag's Slack app.
 
-## Built on MFS
+## Where Tag came from
 
-Tag began as a modified version of the Open Tag example in MFS and uses MFS
-to search indexed sources. See the [project attribution](../../README.md#origins-and-attribution)
-for its origins and the [memory reference](../../references/memory.md) for
-retrieval details.
+Tag began as a modified version of the Open Tag example in MFS. See the
+[project attribution](../../README.md#origins-and-attribution) for its origins,
+the [memory reference](../../references/memory.md) for how memory is stored,
+and [ADR 0012](../adr/0012-live-slack-search.md) for how live search works.

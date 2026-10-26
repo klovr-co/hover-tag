@@ -1,0 +1,14 @@
+/* Copyright 2026 klovr.co
+   SPDX-License-Identifier: Apache-2.0
+   Export Tag and Import: the result grows in under the button; an error shakes once. */
+.xfer { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.xfer .link { display: inline-flex; align-items: center; gap: 5px; }
+.xfer-done { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; color: var(--ok-text); }
+.xfer-done.fresh { animation: rise2 .22s var(--ease); }
+.xfer-err { display: flex; flex-direction: column; gap: 4px; animation: xfer-shake .32s var(--ease); }
+.xfer-float { position: absolute; top: 92px; right: 20px; z-index: 10; max-width: 360px; padding: 8px 10px; border-radius: 10px;
+  background: var(--lift); border: 1px solid var(--line-strong); box-shadow: 0 12px 32px rgba(16, 40, 70, .18); animation: xfer-shake .32s var(--ease); }
+@keyframes xfer-shake { 20% { transform: translateX(-4px); } 45% { transform: translateX(4px); } 70% { transform: translateX(-2px); } }
+@media (prefers-reduced-motion: reduce) {
+  .xfer-done.fresh, .xfer-err, .xfer-float { animation: none; }
+}

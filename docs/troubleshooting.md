@@ -18,7 +18,7 @@ flowchart TD
 
 | Problem | What it means | Fix |
 | --- | --- | --- |
-| The install screen says **Installation stopped** | A download or install step failed. The failed step shows the cause. | Check your internet connection and disk space (about 1.8 GB), then choose **Try again**. It is safe to retry. **Copy details** copies the installer log for a report. |
+| The install screen says **Installation stopped** | A download or install step failed. The failed step shows the cause. | Check your internet connection and disk space (about 1.2 GB), then choose **Try again**. It is safe to retry. **Copy details** copies the installer log for a report. |
 | macOS won't open Tag | Gatekeeper blocks apps that aren't signed and notarized | Download Tag again from the [releases page](https://github.com/klovr-co/hover-tag/releases). Don't bypass the warning for a build you didn't expect. |
 | `tag: command not found` after the terminal installer | Its command directory isn't on your PATH | Add `~/.local/bin` (macOS and Linux) or `%LOCALAPPDATA%\Tag\bin` (Windows) to your PATH, then open a new terminal. |
 | `TAG_HOME must be an absolute path` | `TAG_HOME` is set to a relative path | Unset it, or set it to a full path. |
@@ -59,12 +59,10 @@ no setup, and a failed one is retried on the next start.
 
 | Problem | What it means | Fix |
 | --- | --- | --- |
-| `mfs-server` missing or the wrong version | The pinned memory runtime is unavailable | Run the installer again: the [terminal installer](installation.md#install-from-a-terminal), or reinstall from the app. Ensure `~/.local/bin` (or `%LOCALAPPDATA%\Tag\bin` on Windows) is on `PATH`. |
-| MFS health fails | Nothing is listening at `MFS_URL` | Run `tag start`; inspect `tag logs` and `~/.mfs/server.log`. |
-| Local MFS is healthy but untracked | Another process owns the loopback endpoint | `tag start` and `tag dev` replace an identifiable `mfs-server` with Tag's current runtime. If another kind of service owns the port, stop it or configure a different `MFS_URL`. Remote endpoints are never replaced. |
-| MFS status has no connectors | MFS has no indexed source | Add a source with MFS, then include its exact root in `MFS_ALLOWED_SCOPES`. |
-| MFS scope fails | The scope is absent, outside policy, or its connector credential is unavailable | Check that each URI in `MFS_ALLOWED_SCOPES` (`tag config show`) is, or lies under, a source MFS has indexed (a channel scope sits beneath its connector's root); run `tag doctor`; restart MFS after exporting credentials referenced by connector configuration. |
-| Cross-channel search rejects a channel | The requested name is absent or non-unique in the caller's live grant | Check the channel name, bot membership, caller membership for private/guest access, indexing, and Slack connectivity. The runtime helper never searches outside its bridge-generated grant. |
+| Cross-channel search rejects a channel | The requested name is absent or non-unique in the caller's live grant | Check the channel name, that the Tag and the person are both members (private channels and guests), and Slack connectivity. The search helper never reads outside its bridge-generated grant. |
+| The Tag says it can't search public channels | Slack's search needs a request from Slack itself (an `@` mention or a DM), the `search:read.public` permission, and a person who isn't a guest | Ask again in Slack rather than from a routine. If it says the permission is missing, approve the Tag's app update in Slack, or run `tag NAME start` to request it. Guests can't use Slack's search for apps. |
+| The Tag says it searched as much as Slack allows | Slack allows about 10 searches a minute | Wait a minute and ask again, or name the channels to read. |
+| `tag start` says the old index folder may still hold Slack copies | An earlier release kept a local Slack index | Run `tag memory remove-old-index --yes` to delete Tag's files there. |
 | Slack app token fails | Socket Mode cannot connect | Create an `xapp-` app-level token with `connections:write`. |
 | Slack bot token fails | Web API calls cannot authenticate | Reinstall the Slack app and rerun `tag NAME setup`; enter the `xoxb-` token only in its hidden prompt. |
 | Slack allowed users fails | No caller is authorized, so the bridge fails closed | Rerun `tag NAME setup` to choose the owner again, or set the owner's member ID in `SLACK_ALLOWED_USER_IDS`. |
@@ -113,26 +111,3 @@ the full action, report, and retention details.
 
 When reporting a problem, include the Tag version (`tag version`), operating
 system, AI backend, failing check, and a redacted log excerpt. Never include tokens.
-
-## Slack indexing is rate-limited
-
-Tag-managed memory honors Slack's HTTP 429 `Retry-After` delay, shares the
-cooldown across channels in the same workspace, and retries the current API
-request without restarting the channel's in-progress history read. Channel
-listings are cached for up to a minute so readiness checks do not repeatedly
-consume Slack's discovery quota.
-
-During a cooldown, `tag status` shows **Indexing paused by Slack** with the
-retry delay. `tag start` doesn't wait for it: the Tag connects and answers, and
-indexing continues in the background. History search covers each channel once
-it is indexed. Repeating setup or restarting memory does not clear Slack's
-limit. A memory restart preserves
-the cooldown, but may require replaying an interrupted indexing task.
-
-Existing Tag-managed memory processes automatically migrate to the rate-aware
-runtime on the next start. Tag verifies process identity before restarting
-memory and verifies the new runtime and HTTP health before recording the
-migration. This briefly interrupts shared memory for other running Tags;
-stored indexes, connector configuration, and credentials are preserved.
-Independently managed or remote MFS servers require an equivalent connector
-update by their operator; Tag does not replace their runtime.

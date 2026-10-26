@@ -19,10 +19,12 @@ import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
 import { modelSaveText, ModelMenu, ModelWarning, PermissionsRow, SaveBar, ThinkingRow } from "./AI";
 import { Routines } from "./Routines";
+import { Knowledge } from "./Knowledge";
+import { ExportTag } from "./TagTransfer";
 import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
-export type Tab = "activity" | "channels" | "routines" | "logs" | "details";
+export type Tab = "activity" | "channels" | "routines" | "knowledge" | "logs" | "details";
 
 interface Props {
   api: Bridge;
@@ -42,6 +44,10 @@ interface Props {
   canDescribe?: boolean;
   /** The installed Tag has routines (`routines` capability). */
   canRoutines?: boolean;
+  /** The installed Tag shows its memory and skills (`knowledge` capability). Until the Threads | Knowledge layout, a tab here. */
+  canKnowledge?: boolean;
+  /** The installed Tag can export itself to a file (`tag-export` capability). */
+  canExport?: boolean;
   /** The installed Tag can read model lists again (`saved-models` capability). */
   canRefreshModels?: boolean;
 }
@@ -55,7 +61,7 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false, canKnowledge = false, canExport = false }: Props) {
   const rows = tags.rows;
   const start = rows.find((row) => row.id === initial);
   const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
@@ -145,7 +151,7 @@ export function TagDetail({ api, tags, initial, initialTab = "activity", problem
           {sel.kind === "channel"
             ? <ChannelPane key={`${group.key}:${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} channel={channels.find((c) => c.id === sel.id)!} rows={live} team={group.key} open={(id) => choose({ kind: "tag", id })} />
             : <TagPane key={`${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} tags={tags} row={group.rows.find((r) => r.id === sel.id)!} tab={tab} setTab={setTab}
-              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canRoutines={canRoutines} />}
+              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canRoutines={canRoutines} canKnowledge={canKnowledge} canExport={canExport} />}
         </div>
       </div>
     </>
@@ -263,9 +269,9 @@ function dayLabel(at: Date, now: Date) {
   return diff === 0 ? "Today" : diff === 1 ? "Yesterday" : at.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 }
 
-function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRefreshModels, canRoutines, hideErrors, setHideErrors }: FilterProps & {
+function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRefreshModels, canRoutines, canKnowledge, canExport, hideErrors, setHideErrors }: FilterProps & {
   api: Bridge; tags: Tags; row: TagRow; tab: Tab; setTab: (tab: Tab) => void; problem: string | null;
-  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRefreshModels: boolean; canRoutines: boolean;
+  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRefreshModels: boolean; canRoutines: boolean; canKnowledge: boolean; canExport: boolean;
 }) {
   const state = status(row);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
@@ -346,7 +352,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
       </div>
       <div className="sl-tabbar">
       <div className="sl-tabs" role="tablist">
-        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ...(canRoutines ? [["routines", "Routines", null] as const] : []), ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
+        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ...(canRoutines ? [["routines", "Routines", null] as const] : []), ...(canKnowledge ? [["knowledge", "Knowledge", null] as const] : []), ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
             {label}{count !== null && <> <span className="tcount">{count}</span></>}
           </button>
@@ -361,7 +367,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
           openRoutine={canRoutines ? (id) => { setRoutineFocus(id); setTab("routines"); } : undefined} />}
         {tab === "channels" && (
           <>
-            <p className="lead" style={{ margin: "0 0 8px" }}>{title(row)} answers and remembers conversations in these channels.</p>
+            <p className="lead" style={{ margin: "0 0 8px" }}>{title(row)} answers in these channels.</p>
             {channels.length ? (
               <div className="card">
                 {channels.map((c) => (
@@ -378,8 +384,9 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
         )}
         {tab === "routines" && canRoutines && <Routines api={api} row={row} say={say} focus={routineFocus}
           showLogs={(find) => { setLogFind(find); setTab("logs"); }} />}
+        {tab === "knowledge" && canKnowledge && <Knowledge api={api} row={row} say={say} />}
         {tab === "logs" && <Logs text={logView} copyLog={copyLog} find={logFind} clearFind={() => setLogFind("")} />}
-        {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} />}
+        {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canExport={canExport} />}
       </div>
       {on && tab === "activity" && (
         <div className="sl-compose">
@@ -627,9 +634,9 @@ function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasM
 
 const DESCRIPTION_LIMIT = 140;
 
-function Details({ api, tags, row, copyLog, openAI, say, canDescribe, canRefreshModels }: {
+function Details({ api, tags, row, copyLog, openAI, say, canDescribe, canRefreshModels, canExport }: {
   api: Bridge; tags: Tags; row: TagRow; copyLog: () => Promise<boolean>; openAI: () => void; say: (text: string) => void; canDescribe: boolean;
-  canRefreshModels: boolean;
+  canRefreshModels: boolean; canExport: boolean;
 }) {
   const name = title(row);
   const choice = useModelChoice(api, row.id, {
@@ -737,6 +744,10 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe, canRefresh
       <dl className="sl-kv">
         <dt>Working folder</dt>
         <dd><span className="mono selectable">{shortPath(folder)}</span><button className="link" onClick={() => void api.open(folder)}>Show</button></dd>
+        {canExport && <>
+          <dt>Move</dt>
+          <dd><span className="meta">To another computer: memory, history, skills, threads and settings, never passwords</span><ExportTag api={api} row={row} say={say} /></dd>
+        </>}
         <dt>Log</dt>
         <dd><span className="meta">For troubleshooting</span><button className="link" onClick={() => void copyLog().then((ok) => ok && copyFullLog.mark())}>{copyFullLog.label("Copy full log")}</button></dd>
       </dl>

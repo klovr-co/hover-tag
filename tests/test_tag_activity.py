@@ -272,7 +272,7 @@ class RecentActivityTests(unittest.TestCase):
         run_id = self.record("C0LAUNCH", "completed", "2026-10-04T09:00:00+00:00", "2026-10-04T09:01:00+00:00")
         path = self.root / f"{run_id}.json"
         record = json.loads(path.read_text(encoding="utf-8"))
-        record.update(events=[{"id": "a" * 64, "label": "Browsing connected knowledge…", "status": "completed",
+        record.update(events=[{"id": "a" * 64, "label": "Searching Slack…", "status": "completed",
                                "started_at": record["started_at"], "finished_at": record["started_at"]}], omitted=2)
         path.write_text(json.dumps(record), encoding="utf-8")
         self.assertEqual(3, tag_activity.recent_activity(self.root, "")[0]["step_count"])

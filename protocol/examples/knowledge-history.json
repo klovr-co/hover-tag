@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "tag": "t0klovr1-a0rese02",
+  "changes": [
+    {
+      "id": "2fedd37662e1983d56dd9d9e5f64d53c4b8e024d",
+      "at": "2026-10-22T09:03:00Z",
+      "action": "edited",
+      "summary": "Edited channel C0OPS0001 memory: changed digest-format",
+      "written_by": "local-operator",
+      "via": "tag-app",
+      "from_thread": null,
+      "entries": [
+        "memory/channels/C0OPS0001/core.md#digest-format"
+      ],
+      "undo_of": null,
+      "undoable": true,
+      "undone_by": null
+    },
+    {
+      "id": "e56000161198b093f2731ff9fc1c245ad2021e0f",
+      "at": "2026-10-22T09:02:00Z",
+      "action": "changed",
+      "summary": "Changed access-approval for channel C0OPS0001",
+      "written_by": "U0MAYA001",
+      "via": "slack",
+      "from_thread": "hover-tag://tag/t0klovr1-a0rese02/thread/C0OPS0001/1761400000.000500",
+      "entries": [
+        "memory/channels/C0OPS0001/core.md#access-approval"
+      ],
+      "undo_of": null,
+      "undoable": true,
+      "undone_by": null
+    },
+    {
+      "id": "9f879fde84b9d7759462699a08b3913ef5802be3",
+      "at": "2026-10-19T10:15:00Z",
+      "action": "saved",
+      "summary": "Saved digest-format for channel C0OPS0001",
+      "written_by": "U0MAYA001",
+      "via": "slack",
+      "from_thread": "hover-tag://tag/t0klovr1-a0rese02/thread/C0OPS0001/1760600000.000200",
+      "entries": [
+        "memory/channels/C0OPS0001/core.md#digest-format"
+      ],
+      "undo_of": null,
+      "undoable": true,
+      "undone_by": null
+    }
+  ],
+  "has_more": true
+}

@@ -2,7 +2,7 @@
 
 ## v0.2 alpha line
 
-The supported alpha path is **Slack + Codex CLI + a local MFS server** on macOS
+The supported alpha path is **Slack + Codex CLI, searching Slack live** on macOS
 or Linux. It is intended for trusted, isolated sandbox use. Native Windows
 installation and lifecycle support are included in the CI matrix; live Windows
 Slack/backend qualification must be recorded before claiming that path qualified.

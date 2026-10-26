@@ -1,7 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // Every Tag on this computer, grouped by Slack workspace, under the sky.
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { AIStatus } from "../lib/ai";
 import type { Bridge } from "../lib/bridge";
 import {
@@ -18,7 +18,6 @@ import { useNight } from "../lib/appearance";
 import { ordered, useOrder, useReorder } from "../lib/order";
 import { useFresh, useListMotion } from "../lib/motion";
 import { Avatar, ErrorLine, Icon, MOON, Primary, Sky, Switch, tagIcon, WorkspaceMark } from "./ui";
-import { ModelDownloadNotice } from "./ModelDownload";
 import { UpdateNotice, type Deferral } from "./UpdateNotice";
 
 export const HOW_TAG_WORKS = "https://hover.team/tag";
@@ -52,6 +51,8 @@ interface Props {
   showSettings: (tab?: SettingsTab, privacy?: boolean) => void;
   /** Usage data was turned on at first run: say so once. */
   usageNote?: boolean;
+  /** Import a Tag from a file, shown beside Add Tag when the installed Tag can (`tag-export`). */
+  importTag?: ReactNode;
   seenUsageNote?: () => void;
   now?: Date;
 }
@@ -123,13 +124,13 @@ export function Home(props: Props) {
             <div className="sum"><span className={sum.on ? "sq" : "sq off"} />{sum.text}</div>
           </div>
           <button className="sky-btn" aria-label="Settings" title="Settings" onClick={() => showSettings()}><Icon name="gear" size={16} /></button>
+          {props.importTag}
           <button className={rows.length > 2 && !setup.length && !urgent ? "add solid" : "add"} onClick={add}>
             <Icon name="plus" />Add Tag
           </button>
         </div>
       </Sky>
       <div className="body home-body">
-        <ModelDownloadNotice api={props.api} />
         <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} defer={props.defer} settings={() => props.showSettings("updates")} />
         {/* The window stays one height; a long Tag list scrolls here, under the update banner. */}
         <div className="home-scroll" ref={art.ref}>

@@ -16,8 +16,8 @@ mention must target the Slack app of a Tag that is running on this computer.
 
 Tag brings a Codex or Claude agent, signed in on your computer, into a shared
 Slack conversation. Slack supplies the request and the thread. The agent does
-the work on your computer. Memory (the bundled MFS server) supplies search over
-the channels and sources you approved. Each Tag is a separate Slack app with its
+the work on your computer. When a request needs older context, the Tag searches
+Slack live in the channels that request may read, and keeps no copy. Each Tag is a separate Slack app with its
 own folder, model, and channels. You run Tags from the **Tag app** or the `tag`
 command; both use the same settings.
 
@@ -60,8 +60,9 @@ A few rules matter:
 - **Chat** is the shared interface. It is not where the agent signs in.
 - **Brain** is one agent conversation per Slack thread. A later mention in the
   same thread continues it, for the person who started it.
-- **Memory** holds only channels and sources that are indexed and allowed.
-  Tag uses it only when a request needs it.
+- **Memory** holds only what people asked this Tag to remember. Each Tag has
+  its own; Tags never share it.
+- **Search** reads Slack live, only when a request needs it, and stores nothing.
 - **Tools** come from the agent's environment on your computer and keep their
   own credentials and permissions.
 
@@ -74,7 +75,7 @@ A few rules matter:
 | Unauthorized teammate | Receives a denial. Tag does not read the thread or start the agent. |
 | Slack | Delivers the conversation and shows progress and results. |
 | Codex or Claude | Reasons, searches, uses permitted local tools, and works in the Tag's folder. |
-| Memory (MFS) | Searches and reads indexed, approved sources. |
+| Live search | Reads the Tag's channels, and Slack's public search when asked, without storing anything. |
 | Tag app / `tag` | Install, set up, run, watch, and change Tags on this computer. |
 
 ## How to read the levels
@@ -158,8 +159,7 @@ sequenceDiagram
     B-->>S: Threaded reply
 ```
 
-The Tag connects before memory finishes importing channel history. It can
-answer right away; history search covers each channel once it is indexed.
+The Tag answers right away: there is no channel history to import first.
 
 ## Flow 2: Delegate a task from Slack
 
@@ -306,10 +306,10 @@ sequenceDiagram
     T-->>S: Post the answer
 ```
 
-## Flow 4: Search memory
+## Flow 4: Search Slack
 
-Thread history is short-term context. Memory gives durable, searchable context
-from approved sources.
+Thread history is short-term context. When a request needs more, the Tag
+searches Slack live and keeps no copy of what it reads.
 
 ### Level 1 · Journey
 
@@ -317,12 +317,12 @@ from approved sources.
 
 ```mermaid
 flowchart TD
-    Request["Request needs older<br/>or cross-source context"]
-    Decide{"Durable context needed?"}
+    Request["Request needs older<br/>or cross-channel context"]
+    Decide{"Older context needed?"}
     Thread["Use the thread<br/>and the Tag's folder"]
-    Search["Search allowed<br/>memory scopes only"]
-    Reopen["Open the most<br/>relevant records"]
-    Answer["Answer, with sources<br/>when they help"]
+    Search["Search Slack live in the<br/>channels this request may read"]
+    Reopen["Open the threads<br/>that matter"]
+    Answer["Answer, with links<br/>when they help"]
 
     Request --> Decide
     Decide -->|No| Thread --> Answer
@@ -331,52 +331,48 @@ flowchart TD
 
 ### Level 2 · Task flow
 
-1. The agent decides that it needs outside context.
-2. It searches only the scopes in `MFS_ALLOWED_SCOPES`. A Slack request gets
-   only its own channel's history, plus any sources `MFS_CHANNEL_SCOPES` maps
-   to that channel.
-3. It reopens the best results when it needs exact lines or records.
+1. The agent decides that it needs older context.
+2. The bridge has already worked out which channels this request may read: the
+   current conversation, channels the person named in which both they and the
+   Tag are members, and all public channels only when the person asked for that.
+3. The search helper reads those channels with Slack's history methods, matches
+   messages in memory, and uses Slack's Real-time Search for public channels.
 4. It combines that evidence with the thread and the Tag's folder.
-5. It cites sources when asked or when they make the answer more trustworthy.
+5. It links to the Slack messages when asked or when they make the answer more
+   trustworthy.
 
 New Tags follow invitations: every channel the Tag joins, including later
-invitations, is answered in and indexed. Leaving a channel stops search there
-after about a minute; data already indexed is not erased.
+invitations, is answered in and can be searched. Leaving a channel stops search
+there within about a minute. There is no copy to erase.
 
 ### Level 3 · Service blueprint
 
 ```mermaid
 sequenceDiagram
     participant S as Slack thread
+    participant T as Tag bridge
     participant B as Codex or Claude
-    participant H as Memory helper
-    participant M as Memory server
-    participant X as Indexed sources
+    participant H as Search helper
+    participant W as Slack Web API
 
-    S->>B: Request that needs durable context
-    B->>H: Search an allowed scope
-    H->>H: Refuse scopes outside MFS_ALLOWED_SCOPES
-    H->>M: Scoped search
-    M->>X: Query indexed records
-    X-->>M: Matches
-    M-->>B: Bounded results
-    B->>H: Read the strongest records
-    H->>M: Scoped read
-    M-->>B: Exact evidence
-    B-->>S: Answer from thread, folder, and memory
+    S->>T: Request, with Slack's action token
+    T->>T: Work out which channels this request may read
+    T->>B: Run, with that grant
+    B->>H: Search for the decision
+    H->>H: Refuse channels outside the grant
+    H->>W: conversations.history and replies
+    H->>W: assistant.search.context (public, when asked)
+    W-->>H: Messages
+    H-->>B: Bounded results with links; nothing saved
+    B-->>S: Answer from thread, folder, and Slack
 ```
-
-Memory can index Slack history, local files, GitHub, Jira, Linear, databases,
-object stores, and other connectors. Indexing a source and allowing its scope
-are separate decisions; both are needed.
 
 For a channel summary:
 
 > @Tag summarize this channel and identify unresolved action items.
 
-The agent looks up the current channel in the indexed Slack history. It does
-not mistake the thread for the whole channel. If the channel isn't indexed yet,
-it says so.
+The agent reads the current channel's recent history live. It does not mistake
+the thread for the whole channel.
 
 ## Flow 5: Work in the Tag's folder
 
@@ -543,8 +539,9 @@ If the event arrives but the task fails:
    notice points to the same fix.
 3. Check the AI connection in Settings → AI connections or with
    `tag settings ai`.
-4. For search failures, check that memory is healthy and the source is indexed
-   and allowed.
+4. For search failures, check that the Tag and the person are in the channel,
+   and that the Tag's Slack app has its current permissions (`tag NAME start`
+   asks for any that are missing).
 5. Restart the Tag only after a change that needs a new process.
 
 ## Flow 9: Run, update, and remove Tags
@@ -573,9 +570,8 @@ flowchart LR
 | Check health | Home: *N of M online*; the Tag's Logs tab | `tag NAME status`, `tag NAME doctor`, `tag NAME logs` |
 | Start or stop | The Tag's switch; **Start all** / **Stop all** per workspace; the menu bar | `tag NAME start` / `stop`; `tag start --workspace TEAM` |
 | Keep running after login | Settings → General → **Keep Tags running** and **Open Tag at login** | `tag autostart on` |
-| Start, stop, or check memory | Settings → AI → **Memory** | `tag memory start` / `stop` / `status` |
-| Skip the built-in search model at install | Install → **Continue** → **Memory search** → **Your own endpoint** → **Continue** | `./install.sh --skip-memory-model` (or answer the prompt) |
-| Switch the search model later | Settings → AI → **Memory** → **Search model** | `tag memory embedding local\|custom`; `tag settings` → Workspace and memory |
+| See, edit, or undo what a Tag remembers | the Tag → **Knowledge** | `tag NAME knowledge list` / `edit` / `history` / `undo` |
+| Delete an earlier release's local Slack index | — | `tag memory remove-old-index --yes` |
 | Rename or describe | Details → **Rename** / description **Edit** | `tag NAME rename "Name"`, `tag NAME describe "…"` |
 | Change the model | Details → **Model** | `tag NAME settings ai model VALUE` |
 | Change what it may do without asking | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
@@ -629,7 +625,7 @@ not set up.
 
 4. Attach a screenshot or text file and ask about it. Use a model that reads
    images for the screenshot.
-5. With channel history indexed, ask for a summary of the channel.
+5. Ask for a summary of the channel.
 6. Ask for a file, for example a checklist, and show it attached in the thread.
 7. Ask for a small code or documentation change and a focused check in the
    Tag's folder. Show **Agent activity**, and an approval if one appears.

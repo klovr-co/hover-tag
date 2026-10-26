@@ -591,7 +591,7 @@ class HandoffPromptAndSettingsTests(unittest.TestCase):
         ):
             return opentag_agent.build_prompt(
                 skill_dir=Path("/tmp/open-tag"), workdir=Path("/tmp/workspace"), channel_id="C123",
-                question="q", thread_text="", attachments_dir=None, allowed_scopes="x",
+                question="q", thread_text="", attachments_dir=None,
             )
 
     def test_only_a_first_level_run_with_a_request_file_is_offered_the_helper(self) -> None:

@@ -41,7 +41,7 @@ export interface TagRow {
   main?: boolean;
   error?: string;
   /** Which of the Tag's services answered the last check. */
-  services?: { slack?: boolean; mfs?: boolean } | null;
+  services?: { slack?: boolean; mfs?: boolean } | null; // `mfs` comes only from older Tags.
   /** The one-line description people gave the Tag (its Slack app description). */
   description?: string | null;
   /** The Tag's default model, such as "codex:gpt-5.5", and how people read it. */
@@ -82,9 +82,9 @@ export const STATUS_LABEL: Record<Status, string> = {
   attention: "Needs attention",
 };
 
-/** Settings → General: the one switch that keeps Tags and the memory they search running. */
+/** Settings → General: the one switch that keeps Tags running. */
 export const KEEP_RUNNING_DETAIL =
-  "Start the Tags you switched on after you log in, and restart any that stop, along with the memory they search. Works even when this app is closed.";
+  "Start the Tags you switched on after you log in, and restart any that stop. Works even when this app is closed.";
 
 /** What went wrong with a Tag that needs attention, in its own words when Tag gave one. */
 export function problemText(row: TagRow) {
@@ -92,7 +92,6 @@ export function problemText(row: TagRow) {
   if (row.state === "invalid_configuration") return "Its settings can't be read";
   if (row.state === "invalid_tag") return "This Tag's folder is damaged";
   if (row.services?.slack === false) return "Not connected to Slack";
-  if (row.services?.mfs === false) return "Memory isn't responding";
   return "Needs attention";
 }
 
@@ -104,7 +103,6 @@ export function problemHelp(row: TagRow, aiProblem: string | null) {
       ? "Its AI sign-in needs fixing first. Then turn it off and on again."
       : "It's still running but stopped hearing from Slack. Turn it off and on again; if that doesn't help, check the logs.";
   }
-  if (row.services?.mfs === false) return "Tag can't reach its memory service. With Keep Tags running on, Tag restarts it within a minute. Otherwise turn it off and on again, or check the logs.";
   return "Turn it off and on again, or check the logs to see why.";
 }
 
@@ -280,8 +278,7 @@ export const INSTALL_STEPS = [
   { step: "tools", title: "Getting installation tools", detail: "A small, verified download", weight: 0.1 },
   { step: "python", title: "Preparing Python", detail: "A private copy, so your system stays untouched", weight: 0.15 },
   { step: "download", title: "Downloading Tag", detail: "The latest release, checked before it's used", weight: 0.1 },
-  { step: "components", title: "Installing components", detail: "Slack connection and local search", weight: 0.5 },
-  { step: "memory", title: "Preparing memory", detail: "The search model downloads in the background after install", weight: 0.1 },
+  { step: "components", title: "Installing components", detail: "Slack connection and memory history", weight: 0.6 },
   { step: "command", title: "Finishing up", detail: "Adding the tag command", weight: 0.05 },
 ] as const;
 

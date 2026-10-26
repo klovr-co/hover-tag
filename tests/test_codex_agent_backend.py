@@ -193,11 +193,11 @@ class CodexEventMapperTests(unittest.TestCase):
         started = mapper.map({
             "method": "item/started",
             "params": {"item": {
-                "id": "tool-1", "type": "commandExecution", "command": "python mfs_search.py secret"
+                "id": "tool-1", "type": "commandExecution", "command": "python slack_search.py secret"
             }},
         })
 
-        self.assertEqual("Searching connected knowledge…", started[0]["label"])
+        self.assertEqual("Searching Slack…", started[0]["label"])
         self.assertNotIn("command", started[0])
         self.assertEqual("Reading files…", activity_label({
             "type": "commandExecution", "command": "cat private.txt"
@@ -256,11 +256,11 @@ class CodexEventMapperTests(unittest.TestCase):
 
     def test_helper_mentions_do_not_claim_execution(self) -> None:
         for command in [
-            "echo mfs_search.py", "python -c 'mfs_search.py'",
-            "python unrelated.py mfs_search.py", "python mfs_search.py.bak query",
-            "false && python mfs_search.py query", "python mfs_search.py query; echo done",
-            "python 'unterminated", "bash -lc 'echo mfs_search.py'",
-            "python $(echo mfs_search.py) query",
+            "echo slack_search.py", "python -c 'slack_search.py'",
+            "python unrelated.py slack_search.py", "python slack_search.py.bak query",
+            "false && python slack_search.py query", "python slack_search.py query; echo done",
+            "python 'unterminated", "bash -lc 'echo slack_search.py'",
+            "python $(echo slack_search.py) query",
         ]:
             with self.subTest(command=command):
                 self.assertEqual("Running a command…", activity_label({
@@ -269,12 +269,12 @@ class CodexEventMapperTests(unittest.TestCase):
 
     def test_recognizes_simple_helpers_through_shell_wrapper(self) -> None:
         for command in [
-            "python3 /workspace/scripts/mfs_search.py query",
-            "'/workspace with spaces/mfs_search.py' query",
-            "zsh -lc 'python3.12 scripts/mfs_search.py query'",
+            "python3 /workspace/scripts/slack_search.py query",
+            "'/workspace with spaces/slack_search.py' query",
+            "zsh -lc 'python3.12 scripts/slack_search.py query'",
         ]:
             with self.subTest(command=command):
-                self.assertEqual("Searching connected knowledge…", activity_label({
+                self.assertEqual("Searching Slack…", activity_label({
                     "type": "commandExecution", "command": command,
                 }))
 
