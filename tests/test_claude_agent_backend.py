@@ -448,11 +448,34 @@ class ClaudeAgentRunTests(unittest.TestCase):
         async def script(_client):
             yield ResultMessage(result="ok")
 
-        self.run_agent(script)
-        self.assertEqual({"thinking-display": "summarized"}, FakeClient.instances[0].options.extra_args)
+        with patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "1"}):
+            self.run_agent(script)
+        self.assertEqual("summarized", FakeClient.instances[0].options.extra_args["thinking-display"])
         with patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "0"}):
             self.run_agent(script)
-        self.assertFalse(hasattr(FakeClient.instances[1].options, "extra_args"))
+        self.assertNotIn("thinking-display", FakeClient.instances[1].options.extra_args)
+
+    def test_connects_claude_in_chrome_only_when_the_tag_turns_it_on(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        # Off is explicit, so Claude Code's own "enabled by default" can't connect Chrome.
+        with patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "1"}):
+            os.environ.pop("OPENTAG_CLAUDE_CHROME", None)
+            self.run_agent(script)
+            with patch.dict(os.environ, {"OPENTAG_CLAUDE_CHROME": "0"}):
+                self.run_agent(script)
+            with patch.dict(os.environ, {"OPENTAG_CLAUDE_CHROME": "1"}):
+                self.run_agent(script)
+        for unset_or_off in FakeClient.instances[:2]:
+            self.assertEqual({"thinking-display": "summarized", "no-chrome": None}, unset_or_off.options.extra_args)
+        self.assertEqual({"thinking-display": "summarized", "chrome": None}, FakeClient.instances[2].options.extra_args)
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_CHROME": "1", "OPENTAG_SHOW_THINKING": "0"}):
+            self.run_agent(script)
+        self.assertEqual({"chrome": None}, FakeClient.instances[3].options.extra_args)
+        # An unknown value fails the run instead of guessing whether the browser is wanted.
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_CHROME": "yes"}), self.assertRaisesRegex(Exception, "OPENTAG_CLAUDE_CHROME"):
+            self.run_agent(script)
 
     def test_claude_auto_memory_is_disabled_for_tag_runs(self) -> None:
         async def script(_client):

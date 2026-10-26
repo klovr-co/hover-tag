@@ -39,6 +39,7 @@
     },
     "claude": {
       "mode": "acceptEdits",
+      "chrome": "0",
       "rules": {
         "tag": [
           {
@@ -149,6 +150,18 @@
             "value": "bypassPermissions",
             "label": "Bypass permissions",
             "detail": "Skips approvals. Only deny rules and hooks can stop it."
+          }
+        ],
+        "chrome": [
+          {
+            "value": "0",
+            "label": "Off",
+            "detail": "Turns off Claude in Chrome. Browser tools from the Tag's MCP servers still work."
+          },
+          {
+            "value": "1",
+            "label": "On",
+            "detail": "Uses this computer's signed-in Chrome. Anyone who can ask the Tag can ask it to act there."
           }
         ]
       }

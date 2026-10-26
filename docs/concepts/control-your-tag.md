@@ -136,6 +136,11 @@ Each choice uses the agent's own name for it.
   changes and commands), **Accept edits**, **Auto** (Tag's default), **Don't
   ask**, or **Bypass permissions** (skips approvals; only deny rules and hooks
   can stop it).
+- **Claude Chrome** (`--chrome`) — **Off** (default) or **On**: Claude uses
+  Claude in Chrome in the signed-in Chrome on the computer running Tag. Anyone
+  who can ask the Tag can then ask it to act on sites signed in there, so Tag
+  marks On as a warning. See
+  [Use your signed-in Chrome](adding-integrations.md#use-your-signed-in-chrome).
 
 A running Tag restarts to use the change. From the terminal, run
 `tag NAME settings ai permissions codex-sandbox=read-only claude-mode=default --restart`.

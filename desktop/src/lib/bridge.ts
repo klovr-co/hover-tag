@@ -339,7 +339,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           const next = structuredClone(ai.permissions);
           for (const item of settings) {
             const [name, picked] = item.split("=");
-            const [backend, key] = name === "claude-mode" ? ["claude", "mode"] : ["codex", name.replace("codex-", "")];
+            const [backend, key] = name.startsWith("claude-") ? ["claude", name.replace("claude-", "")] : ["codex", name.replace("codex-", "")];
             const options = (next.options as Record<string, Record<string, { value: string }[]> | undefined>)[backend]?.[key];
             if (!options?.some((o) => o.value === picked)) {
               return { code: 1, stdout: JSON.stringify({ schema_version: 1, ok: false, error: `${name}: choose another value` }), stderr: "" };

@@ -16,6 +16,7 @@ const SETTINGS = {
   "codex-approvals": { backend: "codex", key: "approvals" },
   "codex-reviewer": { backend: "codex", key: "reviewer" },
   "claude-mode": { backend: "claude", key: "mode" },
+  "claude-chrome": { backend: "claude", key: "chrome" },
 } as const;
 export type Setting = keyof typeof SETTINGS;
 export type RuleBackend = "codex" | "claude";
