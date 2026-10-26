@@ -138,6 +138,25 @@ All notable changes to Tag are documented here.
 
 ### Changed
 
+- Tags search Slack live instead of keeping a local copy. When a request needs
+  older messages, a Tag reads the current conversation and channels you name
+  (when you and the Tag are both in them) with its own Slack connection, and
+  searches all public channels with Slack's own search when you ask for that.
+  It stores nothing it reads, so results show Slack as it is now. There is no
+  personal sign-in step. Slack's public search works for requests from Slack
+  (a mention or a DM), not for guests, and about 10 times a minute; the Tag
+  says when it skipped it. The Tag's Slack app asks for one new permission,
+  `search:read.public`, on its next start.
+- Tag no longer installs a search model or runs a memory server, so the
+  install is about 1.2 GB instead of 1.8 GB and has no background download.
+  Settings no longer has Memory or Search model, and the install screen goes
+  straight to **Install Tag**. On the first start after upgrading, Tag asks the
+  old index server to drop every Tag's Slack copies, stops it, and removes each
+  Tag's index settings and history credential. The index folder may hold other
+  data, so Tag leaves it and says where it is; `tag memory remove-old-index
+  --yes` deletes Tag's files there. `tag rollback` to a release that needs the
+  old index is refused after this.
+
 - Always allow in Slack now saves a Codex rule for that Tag only, in the Tag's
   folder, instead of in your global Codex rules. Rules saved before stay global.
 - `OPENTAG_CLAUDE_TRANSPORT=print` now runs only when the Claude permission
