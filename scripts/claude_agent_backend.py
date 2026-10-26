@@ -56,6 +56,9 @@ except ImportError:  # Direct script execution does not create a package context
 
 CONTROL_POLL_SECONDS = 0.1
 CATALOG_TIMEOUT_SECONDS = 30.0
+# One CLI message can carry a whole tool result, such as a screenshot or PDF page; the SDK's 1 MB default is too small.
+MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+MESSAGE_TOO_LARGE_ERROR = "exceeded maximum buffer size"
 FINAL_STOP_REASONS = frozenset({"end_turn", "stop_sequence", "max_tokens", "refusal", "pause_turn"})
 READ_TOOLS = frozenset({"Read", "Glob", "Grep", "LS", "NotebookRead"})
 FILE_CHANGE_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit"})
@@ -725,6 +728,7 @@ class ClaudeAgentRun:
             "add_dirs": [str(path) for path in self.add_dirs],
             "permission_mode": claude_permission_mode(),
             "include_partial_messages": True,
+            "max_buffer_size": MAX_MESSAGE_BYTES,
             "setting_sources": ["user", "project", "local"],
             "can_use_tool": can_use_tool,
             "stderr": capture_stderr,
@@ -1000,6 +1004,9 @@ class ClaudeAgentRun:
             pass
 
     def _failure_message(self, exc: BaseException | None) -> str:
+        if exc is not None and MESSAGE_TOO_LARGE_ERROR in str(exc):
+            return (f"A tool returned more than {MAX_MESSAGE_BYTES // (1024 * 1024)} MB in one go, "
+                    "more than Tag can pass on; ask for a smaller file, fewer pages or fewer images")
         detail = "\n".join(self.stderr).strip()[-4000:]
         base = f"Claude Agent SDK failed: {exc}" if exc is not None else "Claude Agent SDK ended without a result"
         return f"{base}: {detail}" if detail else base
