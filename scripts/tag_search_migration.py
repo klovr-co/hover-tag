@@ -72,7 +72,7 @@ def retire_tag(home: Path) -> bool:
     if connector:
         path = Path(connector).expanduser()
         # Only a connector file Tag wrote inside this Tag's own folder.
-        if path.suffix == ".toml" and path.is_file() and home in path.resolve().parents:
+        if path.suffix == ".toml" and path.is_file() and home.resolve() in path.resolve().parents:
             path.unlink()
             changed = True
     remaining = tag_config.load_config(config) if config.is_file() else {}
