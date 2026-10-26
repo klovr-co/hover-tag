@@ -445,8 +445,9 @@ See `protocol/examples/ai-effort.json`.
 permissions. Codex and Claude keep their own settings: `codex-sandbox`
 (`read-only`, `workspace-write`, `danger-full-access`), `codex-approvals`
 (`untrusted`, `on-request`, `never`), `codex-reviewer` (`auto_review`,
-`user`), and `claude-mode` (`default`, `acceptEdits`, `auto`, `dontAsk`,
-`bypassPermissions`). Only the settings named change. It returns `ok`,
+`user`), `claude-mode` (`default`, `acceptEdits`, `auto`, `dontAsk`,
+`bypassPermissions`), and `claude-chrome` (`0` or `1`, whether Claude runs use
+the operator's signed-in Chrome through Claude in Chrome). Only the settings named change. It returns `ok`,
 `permissions`, `restart_required`, and `restarted`, and accepts `--restart`
 like `model`. Without settings, `tag NAME settings ai permissions --json`
 returns the permissions themselves at the top level: `schema_version`,

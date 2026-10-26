@@ -222,8 +222,7 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a slack:// connector URI"
     if key == "MFS_SLACK_CONNECTOR_CONFIG" and value and not Path(value).is_absolute():
         return "Use an absolute connector configuration path"
-    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING",
-               "OPENTAG_CLAUDE_CHROME"} and value not in {"0", "1"}:
+    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING"} and value not in {"0", "1"}:
         return "Use 0 or 1"
     if key == "SLACK_CHANNEL_POLICY" and value not in {"selected", "invited"}:
         return "Choose selected or invited"

@@ -501,7 +501,7 @@ class CommandTests(Fixture):
         none = {"tag": [], "folder": [], "all_tags": [], "personal": []}
         # Unset approvals follow the operator's own Codex config, shown as "".
         self.assertEqual(({"sandbox": "workspace-write", "approvals": "", "reviewer": "auto_review", "rules": none},
-                          {"mode": "auto", "rules": none}),
+                          {"mode": "auto", "chrome": "0", "rules": none}),
                          (result["permissions"]["codex"], result["permissions"]["claude"]))
         target, calls = self.target(running=True)
         code, output = self.run_cli(["permissions", "codex-sandbox=read-only", "claude-mode=acceptEdits"], target, json_output=True)
@@ -530,7 +530,12 @@ class CommandTests(Fixture):
         self.assertEqual((True, ["restart"]), (json.loads(output)["restarted"], calls))
         code, output = self.run_cli(["permissions"], target)
         self.assertIn("Codex · Read only · approval policy: never", output)
-        self.assertIn("Claude · Accept edits", output)
+        self.assertIn("Claude · Accept edits · Chrome: off", output)
+        code, output = self.run_cli(["permissions", "claude-chrome=1"], target, json_output=True)
+        self.assertEqual("1", json.loads(output)["permissions"]["claude"]["chrome"])
+        self.assertEqual("1", tag_config.load_config(self.config)["OPENTAG_CLAUDE_CHROME"])
+        with self.assertRaisesRegex(ValueError, "claude-chrome: Choose 0, 1"):
+            self.run_cli(["permissions", "claude-chrome=yes"], target)
         with self.assertRaisesRegex(ValueError, "claude-mode: Choose default"):
             self.run_cli(["permissions", "claude-mode=plan"], target)
         with self.assertRaisesRegex(ValueError, "codex-sandbox=VALUE"):
@@ -548,7 +553,7 @@ class CommandTests(Fixture):
             code, output = self.run_cli(["permissions", "allow", "codex", "npm run build"], target)
             self.assertIn("Allowed npm run build for Maya's Tag's Codex", output)
             code, output = self.run_cli(["permissions"], target)
-            self.assertIn("Claude · Auto · rules: 1 for this Tag", output)
+            self.assertIn("Claude · Auto · Chrome: off · rules: 1 for this Tag", output)
             self.assertIn("codex · for this Tag · allow · npm run build", output)
             # Rules for all Tags are shared, so they're edited without a Tag name.
             everyone = tag_ai.Target(self.home / "install", "", lambda: False, lambda action: 0, "Your Tags")

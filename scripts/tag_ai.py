@@ -549,7 +549,8 @@ def permissions_text(result: dict[str, Any]) -> list[str]:
     if approvals != "never":
         asks += f" · {_label('codex-reviewer', codex['reviewer'])}"
     return [f"Codex · {_label('codex-sandbox', codex['sandbox'])} · {asks}" + _rules_text(codex),
-            f"Claude · {_label('claude-mode', claude['mode'])}" + _rules_text(claude),
+            f"Claude · {_label('claude-mode', claude['mode'])} · Chrome: {_label('claude-chrome', claude['chrome']).lower()}"
+            + _rules_text(claude),
             *(f"Fix {name}: {error}" for name, error in result.get("errors", {}).items())]
 
 
@@ -843,7 +844,7 @@ USAGE = ("tag settings ai connections | sign-in codex|claude [--method chatgpt|c
          "[--account ID] | resume [--restart] [--json]; "
          "tag [TAG] settings ai status | models [--refresh] | model VALUE [--effort LEVEL|default] | "
          "effort LEVEL|default | permissions [codex-sandbox=V] [codex-approvals=V] [codex-reviewer=V] "
-         "[claude-mode=V] [--restart] [--json] | permissions allow|block|remove codex|claude RULE [--json]; "
+         "[claude-mode=V] [claude-chrome=0|1] [--restart] [--json] | permissions allow|block|remove codex|claude RULE [--json]; "
          "tag settings ai rules [allow|block|remove codex|claude RULE] [--json]; " + tag_api.USAGE)
 
 
@@ -1171,7 +1172,8 @@ def _choose_permissions(target: Target) -> bool:
     config = settings.load_config(settings.config_path(target.home))
     current = permissions_report(target.home, config)
     titles = {"codex-sandbox": "Codex sandbox", "codex-approvals": "Codex approval policy",
-              "codex-reviewer": "Codex approvals reviewer", "claude-mode": "Claude permission mode"}
+              "codex-reviewer": "Codex approvals reviewer", "claude-mode": "Claude permission mode",
+              "claude-chrome": "Claude in Chrome"}
     if current["codex"]["approvals"] == "never":
         del titles["codex-reviewer"]  # Like Tag.app: with approval policy never, nothing is reviewed.
     names = list(titles)
@@ -1187,7 +1189,8 @@ def _choose_permissions(target: Target) -> bool:
     name = names[picked]
     key, options, _ = agent_permissions.SETTINGS[name]
     now = {"codex-sandbox": current["codex"]["sandbox"], "codex-approvals": current["codex"]["approvals"],
-           "codex-reviewer": current["codex"]["reviewer"], "claude-mode": current["claude"]["mode"]}[name]
+           "codex-reviewer": current["codex"]["reviewer"], "claude-mode": current["claude"]["mode"],
+           "claude-chrome": current["claude"]["chrome"]}[name]
     values = [option[0] for option in options]
     choice = ui.choose(titles[name], [f"{label} · {detail}" for _, label, detail in options] + ["Cancel"],
                        default=values.index(now) if now in values else 0)

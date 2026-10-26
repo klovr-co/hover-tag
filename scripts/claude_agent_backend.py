@@ -92,11 +92,6 @@ def claude_cli_path() -> str | None:
     return configured or shutil.which("claude")
 
 
-def claude_chrome_enabled() -> bool:
-    """Whether this Tag's Claude runs connect to the operator's Chrome through Claude in Chrome."""
-    return os.getenv("OPENTAG_CLAUDE_CHROME", "0").strip() == "1"
-
-
 def message_payload(message: Any) -> dict[str, Any]:
     """Convert one SDK message into a plain dict tagged with its SDK class."""
     payload = asdict(message) if is_dataclass(message) else dict(message) if isinstance(message, dict) else {}
@@ -761,6 +756,7 @@ class ClaudeAgentRun:
             if self.text_only_instructions is None:
                 agent_permissions.check_claude_folder(self.cwd)
             settings = agent_permissions.claude_settings()
+            chrome = agent_permissions.claude_chrome()
         except ValueError as exc:
             raise ClaudeAgentError(str(exc)) from None
         if fast_mode:
@@ -770,7 +766,7 @@ class ClaudeAgentRun:
         if show_thinking():
             # Newer models omit thinking text unless asked; summaries are all the API offers.
             extra_args["thinking-display"] = "summarized"
-        if claude_chrome_enabled():
+        if chrome:
             # Claude in Chrome is off unless the CLI starts with --chrome; its tool calls still ask in Slack.
             extra_args["chrome"] = None
         if extra_args:

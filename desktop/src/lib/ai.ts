@@ -132,10 +132,11 @@ export interface Permissions {
   /** Saved values Tag won't run with, by setting, with the reason. */
   errors?: Record<string, string>;
   codex: { sandbox: string; approvals: string; reviewer: string; rules?: AgentRules };
-  claude: { mode: string; rules?: AgentRules };
+  /** `chrome` is "1" when Claude runs use the operator's signed-in Chrome. */
+  claude: { mode: string; chrome: string; rules?: AgentRules };
   options: {
     codex: { sandbox: PermissionOption[]; approvals: PermissionOption[]; reviewer: PermissionOption[] };
-    claude: { mode: PermissionOption[] };
+    claude: { mode: PermissionOption[]; chrome: PermissionOption[] };
   };
 }
 

@@ -49,6 +49,10 @@ CLAUDE_MODE: tuple[Option, ...] = (
     ("dontAsk", "Don't ask", "Never asks. Does only what's already allowed and refuses the rest."),
     ("bypassPermissions", "Bypass permissions", "Skips approvals. Only deny rules and hooks can stop it."),
 )
+CLAUDE_CHROME: tuple[Option, ...] = (
+    ("0", "Off", "Claude has no browser."),
+    ("1", "On", "Uses this computer's signed-in Chrome. Anyone who can ask the Tag can ask it to act there."),
+)
 # Setting, its options, and the default when unset. Unset Codex approvals send
 # nothing, so Codex follows the operator's own configuration.
 SETTINGS: dict[str, tuple[str, tuple[Option, ...], str]] = {
@@ -56,6 +60,7 @@ SETTINGS: dict[str, tuple[str, tuple[Option, ...], str]] = {
     "codex-approvals": ("OPENTAG_CODEX_APPROVALS", CODEX_APPROVALS, ""),
     "codex-reviewer": ("OPENTAG_CODEX_REVIEWER", CODEX_REVIEWER, "auto_review"),
     "claude-mode": ("OPENTAG_CLAUDE_PERMISSION_MODE", CLAUDE_MODE, "auto"),
+    "claude-chrome": ("OPENTAG_CLAUDE_CHROME", CLAUDE_CHROME, "0"),
 }
 KEYS = {key: name for name, (key, _, _) in SETTINGS.items()}
 # The rollback transports have fixed flags, so they run only with the settings they match:
@@ -84,6 +89,11 @@ def _value(name: str, values: dict[str, str] | None) -> str:
 def claude_mode(values: dict[str, str] | None = None) -> str:
     """The Agent SDK permission mode for this Tag."""
     return _value("claude-mode", values)
+
+
+def claude_chrome(values: dict[str, str] | None = None) -> bool:
+    """Whether Agent SDK runs connect to the operator's Chrome through Claude in Chrome."""
+    return _value("claude-chrome", values) == "1"
 
 
 def codex_thread(values: dict[str, str] | None = None) -> dict[str, str]:
@@ -609,7 +619,7 @@ def report(values: dict[str, str], workdir: Path | None = None, *, own_folder: b
 
     codex: dict[str, Any] = {"sandbox": value("codex-sandbox"), "approvals": value("codex-approvals"),
                              "reviewer": value("codex-reviewer")}
-    claude: dict[str, Any] = {"mode": value("claude-mode")}
+    claude: dict[str, Any] = {"mode": value("claude-mode"), "chrome": value("claude-chrome")}
     extra: dict[str, Any] = {"errors": errors} if errors else {}
     if workdir is not None:
         found = rules(workdir)
@@ -620,7 +630,7 @@ def report(values: dict[str, str], workdir: Path | None = None, *, own_folder: b
         "claude": claude,
         "options": {"codex": {"sandbox": options("codex-sandbox"), "approvals": options("codex-approvals"),
                               "reviewer": options("codex-reviewer")},
-                    "claude": {"mode": options("claude-mode")}},
+                    "claude": {"mode": options("claude-mode"), "chrome": options("claude-chrome")}},
     }
 
 

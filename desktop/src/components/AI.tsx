@@ -315,7 +315,8 @@ export function ThinkingRow({ entry, value, onChange, disabled }: {
   );
 }
 
-const WARN = new Set(["danger-full-access", "bypassPermissions"]);
+/** Choices that give the agent much more reach, as `setting=value`. */
+const WARN = new Set(["codex-sandbox=danger-full-access", "claude-mode=bypassPermissions", "claude-chrome=1"]);
 
 /** Tag's reason it won't run with the saved value, while that's still the one shown. */
 const reasonFor = (choice: PermissionsChoice, setting: Setting) =>
@@ -333,7 +334,7 @@ function PermissionSetting({ choice, setting, title, disabled }: {
   const options = optionsFor(choice.report!, setting);
   const picked = options.find((o) => o.value === value);
   const reason = reasonFor(choice, setting);
-  const warn = WARN.has(value);
+  const warn = WARN.has(`${setting}=${value}`);
   return (
     <div className="think pset">
       <span className="tlab">{title}</span>
@@ -431,6 +432,7 @@ export function PermissionsRow({ choice, using, disabled, openSettings }: {
         <TagRules choice={choice} backend="codex" disabled={disabled} openSettings={openSettings} />
       </> : <>
         <PermissionSetting choice={choice} setting="claude-mode" title="Mode" disabled={disabled} />
+        <PermissionSetting choice={choice} setting="claude-chrome" title="Chrome" disabled={disabled} />
         <TagRules choice={choice} backend="claude" disabled={disabled} openSettings={openSettings} />
       </>}
     </section>

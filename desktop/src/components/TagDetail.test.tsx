@@ -198,6 +198,21 @@ describe("Tag detail", () => {
       "claude-mode=acceptEdits", "--json"]));
   });
 
+  it("turns on Claude in Chrome for a Claude Tag, warning who can then act in the browser", async () => {
+    const { calls } = await open("Details", false, claudeTag);
+    const claude = await screen.findByRole("region", { name: "Claude permissions" }, { timeout: 5000 });
+    const chrome = within(claude).getByRole("radiogroup", { name: "Chrome" });
+    expect(within(chrome).getByRole("radio", { name: "Off" }).getAttribute("aria-checked")).toBe("true");
+    expect(within(claude).getByText("Claude has no browser.")).toBeTruthy();
+    fireEvent.click(within(chrome).getByRole("radio", { name: "On" }));
+    const warning = within(claude).getByText("Uses this computer's signed-in Chrome. Anyone who can ask the Tag can ask it to act there.");
+    expect(warning.closest("p")?.className).toContain("mwarn");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(calls).toContainEqual([expect.any(String), "settings", "ai", "permissions",
+      "claude-chrome=1", "--json"]));
+    expect(within(chrome).getByRole("radio", { name: "On" }).getAttribute("aria-checked")).toBe("true");
+  });
+
   it("hides who answers Codex when it never asks, and Cancel puts every setting back", async () => {
     await open("Details");
     const codex = await screen.findByRole("region", { name: "Codex permissions" }, { timeout: 5000 });

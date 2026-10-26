@@ -45,11 +45,12 @@ Learn more about configuring and authenticating MCP connections in the
 ## Use your signed-in Chrome
 
 Claude Tags can use Claude in Chrome, which acts in the Chrome on the computer
-running Tag, with its sign-ins. It is off by default. To turn it on:
+running Tag, with its sign-ins. It is off by default. To turn it on, open the
+Tag in Tag.app, go to **Details → Permissions**, set **Chrome** to **On**, and
+click **Save and restart**. From the terminal, run:
 
 ```sh
-tag NAME config set OPENTAG_CLAUDE_CHROME 1
-tag restart
+tag NAME settings ai permissions claude-chrome=1 --restart
 ```
 
 Keep Chrome open with the Claude in Chrome extension signed in while the Tag

@@ -466,6 +466,9 @@ class ClaudeAgentRunTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENTAG_CLAUDE_CHROME": "1", "OPENTAG_SHOW_THINKING": "0"}):
             self.run_agent(script)
         self.assertEqual({"chrome": None}, FakeClient.instances[2].options.extra_args)
+        # An unknown value fails the run instead of guessing whether the browser is wanted.
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_CHROME": "yes"}), self.assertRaisesRegex(Exception, "OPENTAG_CLAUDE_CHROME"):
+            self.run_agent(script)
 
     def test_claude_auto_memory_is_disabled_for_tag_runs(self) -> None:
         async def script(_client):
