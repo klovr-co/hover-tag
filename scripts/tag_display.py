@@ -311,10 +311,10 @@ def doctor_summary(report, *, title="Doctor"):
         ("Runtime", matching(lambda label: label in {
             "Tag runtime dependencies", "Tag command", "installer", "release metadata"
         })),
-        ("Configuration", matching(lambda label: label.startswith(("SLACK_", "MFS_TOKEN")) or label in {
+        ("Configuration", matching(lambda label: label.startswith("SLACK_") or label in {
             "supported transport", "agent workspace", "Slack app manifest", "Slack allowed users"
         })),
-        ("Memory", matching(lambda label: label.startswith("MFS") and not label.startswith("MFS_TOKEN"))),
+        ("Memory", matching(lambda label: label == "Tag memory")),
         ("Agent", matching(lambda label: label.startswith("backend") or label in {"OPENTAG_BACKEND", "supported backend"})),
         ("Slack", matching(lambda label: label.startswith("Slack") and label not in {"Slack app manifest", "Slack allowed users"})),
     ]

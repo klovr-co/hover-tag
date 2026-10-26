@@ -184,25 +184,6 @@ class OpenTagSetupTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["env"]["SLACK_CLI_APP_ICON_PATH"], str(icon))
 
 
-    def test_connector_files_are_separate_for_each_tag_home(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            channels = [opentag_setup.slack_channels.SlackChannel("C1", "test", False, True)]
-            original = opentag_setup.write_slack_connector("T123", channels, "30", home=root / "working")
-            before = original.read_bytes()
-            test = opentag_setup.write_slack_connector("T123", channels, "7", home=root / "test")
-            self.assertNotEqual(original, test)
-            self.assertEqual(original.read_bytes(), before)
-            self.assertEqual(test.parent, root / "test/integrations/mfs/connectors")
-            self.assertFalse((root / ".mfs").exists())
-            if os.name != "nt":
-                self.assertEqual(stat.S_IMODE(test.stat().st_mode), 0o600)
-
-    def test_connector_rejects_workspace_path_traversal(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaises(ValueError):
-                opentag_setup.write_slack_connector("T/../../outside", [], "7", home=Path(directory))
-
     def test_app_repair_saves_link_and_resumes_without_relinking_or_popup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
@@ -406,17 +387,6 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertNotIn("super-secret", redacted)
         self.assertNotIn("xapp-1-secret", redacted)
 
-    def test_connector_is_limited_to_explicit_channels_and_window(self) -> None:
-        channels = [
-            opentag_setup.slack_channels.SlackChannel("C1", "team", False, True),
-            opentag_setup.slack_channels.SlackChannel("G2", "private-room", True, True),
-        ]
-        rendered = opentag_setup.render_slack_connector("T123", channels, "30")
-        self.assertIn('channel_ids = ["C1", "G2"]', rendered)
-        self.assertIn('channel_types = ["private_channel", "public_channel"]', rendered)
-        self.assertIn('oldest = "now-30d"', rendered)
-        self.assertIn('token = "env:MFS_SLACK_TOKEN"', rendered)
-
     def test_guided_setup_expands_and_validates_workspace_override(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -465,7 +435,7 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertEqual("UOWNER", ask_required("Owner Slack member ID"))
 
     def test_runtime_dependencies_come_from_the_pinned_requirement_file(self) -> None:
-        self.assertEqual(runtime_requirement("mfs-server"), "mfs-server[slack]==0.4.6")
+        self.assertEqual(runtime_requirement("dulwich"), "dulwich==1.2.19")
 
     def test_render_env_shell_quotes_values(self) -> None:
         rendered = render_env({"OPENTAG_WORKDIR": "/tmp/Tag workspace", "TOKEN": "a'b"})
@@ -1005,16 +975,15 @@ class GuidedSetupFlowTests(unittest.TestCase):
         values = opentag_setup.settings.load_config(self.config)
         self.assertEqual((values["SLACK_ALLOWED_USER_IDS"], values["SLACK_CHANNEL_POLICY"], values["SLACK_CHANNEL_IDS"]),
                          ("U01MAYA", "invited", "C1"))
-        self.assertTrue(Path(values["MFS_SLACK_CONNECTOR_CONFIG"]).is_file())
-        self.assertIn("C1", values["MFS_ALLOWED_SCOPES"])
+        # Slack is searched live: setup indexes nothing and saves no history credential.
+        self.assertFalse([key for key in values if key.startswith("MFS_")])
 
-    def test_zero_channels_finish_with_memory_ready_for_invitations(self):
+    def test_zero_channels_finish_ready_for_invitations(self):
         client = self.run_setup([*self.NEW_TAG, answer([])])
         self.assertEqual(self.result, 0)
         values = opentag_setup.settings.load_config(self.config)
         self.assertEqual((values["SLACK_CHANNEL_IDS"], values["SLACK_CHANNEL_POLICY"]), ("", "invited"))
-        self.assertEqual(values["MFS_SLACK_TOKEN"], "xoxb-1")
-        self.assertNotIn("MFS_SLACK_CONNECTOR_CONFIG", values)
+        self.assertFalse([key for key in values if key.startswith("MFS_")])
         self.assertEqual(opentag_setup.settings.config_errors(values), {})
         self.assertNotIn("ready", [q["id"] for q in client.questions()])
 

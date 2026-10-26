@@ -13,7 +13,7 @@ import stat
 from contextlib import redirect_stdout
 from io import StringIO
 
-from scripts import opentag_setup, tag_cli, tag_credentials, tag_instances
+from scripts import opentag_setup, tag_cli, tag_instances
 from scripts.tag_paths import instance_home, runtime_environment
 
 
@@ -141,17 +141,14 @@ class TagInstanceTests(unittest.TestCase):
         context = tag_instances.create(self.root, "work")
         environment = tag_cli.instance_environment(context, values={
             "OPENTAG_STARTUP_ATTEMPTS": "99",
-            "OPENTAG_MFS_STARTUP_ATTEMPTS": "101",
         }, source={
             "PATH": "/fixture/bin",
             "OPENTAG_STARTUP_ATTEMPTS": "7",
-            "OPENTAG_MFS_STARTUP_ATTEMPTS": "11",
             "OPENTAG_ENV_FILE": "/wrong/settings.json",
             "OPENTAG_BACKEND": "claude",
         })
 
         self.assertEqual(environment["OPENTAG_STARTUP_ATTEMPTS"], "7")
-        self.assertEqual(environment["OPENTAG_MFS_STARTUP_ATTEMPTS"], "11")
         self.assertEqual(
             environment["OPENTAG_ENV_FILE"], str(context.home / "config/settings.json")
         )
@@ -163,7 +160,6 @@ class TagInstanceTests(unittest.TestCase):
             "TAG_HOME": str(self.root),
             "OPENTAG_BACKEND": "codex",
             "MFS_URL": "http://127.0.0.1:13619",
-            "MFS_ALLOWED_SCOPES": "file://local/test",
             "SLACK_ALLOWED_USER_IDS": "UOWNER",
         }
 
@@ -180,20 +176,6 @@ class TagInstanceTests(unittest.TestCase):
         ), patch.object(tag_cli, "doctor_report", side_effect=doctor_report), redirect_stdout(StringIO()) as output:
             self.assertEqual(tag_cli.main(), 0)
         self.assertIn("Slack workspace not configured", output.getvalue())
-
-    def test_connector_uses_private_instance_credential_file(self) -> None:
-        home = tag_instances.create(self.root, "work").home
-        credential = tag_credentials.write_slack_history(home, "xoxb-secret")
-        connector = opentag_setup.write_slack_connector(
-            "T123", [opentag_setup.slack_channels.SlackChannel("C1", "team", False, True)],
-            "30", home=home, app_id="A456", credential=credential,
-        )
-        content = connector.read_text(encoding="utf-8")
-        self.assertIn(f"token = {json.dumps('file:' + str(credential))}", content)
-        self.assertNotIn("xoxb-secret", content)
-        self.assertEqual(connector.name, "tag-t123-a456.toml")
-        if os.name != "nt":
-            self.assertEqual(stat.S_IMODE(credential.stat().st_mode), 0o600)
 
     def test_cli_add_targets_setup_and_unknown_target_creates_nothing(self) -> None:
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
@@ -261,31 +243,16 @@ class TagInstanceTests(unittest.TestCase):
             self.assertEqual(tag_cli.main(), 0)
         stop.assert_called_once_with(home, "slack")
 
-    def test_stop_explains_memory_ownership_and_remaining_tags(self) -> None:
+    def test_stop_mentions_no_memory_service(self) -> None:
         tag_instances.ensure_default(self.root)
-        for managed, bridges, expected in (
-            (True, [], "Still running · no active Tags"),
-            (True, ["personal"], "Still running for: personal"),
-            (False, [], "No Tag-managed process running"),
-            (False, ["personal"], "No Tag-managed process running · active Tags: personal"),
-        ):
-            with self.subTest(managed=managed, bridges=bridges):
-                output = StringIO()
-                with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
-                    sys, "argv", ["tag", "stop"]
-                ), patch.object(tag_cli, "stop_process") as stop, patch.object(
-                    tag_cli, "process_for", return_value=object() if managed else None
-                ), patch.object(tag_cli, "bridge_processes", return_value=bridges) as running, redirect_stdout(output):
-                    self.assertEqual(tag_cli.main(), 0)
-                stop.assert_called_once_with(self.root / "instances/default", "slack")
-                running.assert_called_once_with(self.root)
-                self.assertIn(expected, output.getvalue())
-                self.assertEqual("Stop memory too" in output.getvalue(), managed and not bridges)
-                self.assertEqual(
-                    "Stop those Tags before running tag memory stop." in output.getvalue(),
-                    managed and bool(bridges),
-                )
-                self.assertNotIn("Shared service left running", output.getvalue())
+        output = StringIO()
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+            sys, "argv", ["tag", "stop"]
+        ), patch.object(tag_cli, "stop_process") as stop, redirect_stdout(output):
+            self.assertEqual(tag_cli.main(), 0)
+        stop.assert_called_once_with(self.root / "instances/default", "slack")
+        self.assertIn("Tag is stopped", output.getvalue())
+        self.assertNotIn("memory", output.getvalue().lower())
 
 
 if __name__ == "__main__":

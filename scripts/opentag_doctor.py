@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 CHECK_RESULTS: list[dict[str, Any]] | None = None
-RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
+RUNTIME_DEPENDENCIES = ("dulwich", "psutil", "slack_bolt")
 
 
 def recovery_hint(label: str) -> str:
@@ -30,8 +30,6 @@ def recovery_hint(label: str) -> str:
         return "Re-run the Tag installer; for a source checkout, run ./install.sh --dependencies-only"
     if label == "Tag memory":
         return "Fix or move the damaged file named in the detail in Tag's memory folder; tag knowledge history shows earlier versions"
-    if label.startswith("MFS"):
-        return "Check tag config show, start MFS, and index the configured sources before retrying"
     if label.startswith("Slack") or label.startswith("SLACK_"):
         return "Check Slack tokens, allowed member IDs, channel membership, and app scopes in tag setup or tag config"
     if label.startswith("backend") or label == "OPENTAG_BACKEND":
@@ -42,15 +40,6 @@ def recovery_hint(label: str) -> str:
 
 def env(name: str) -> str:
     return os.getenv(name, "").strip()
-
-
-def token_from_env() -> str | None:
-    if env("MFS_TOKEN"):
-        return env("MFS_TOKEN")
-    token_file = Path.home() / ".mfs" / "server.token"
-    if token_file.exists():
-        return token_file.read_text(encoding="utf-8").strip()
-    return None
 
 
 def print_check(ok: bool, label: str, detail: str = "", *, next_action: str | None = None) -> None:
@@ -106,13 +95,7 @@ def slack_api(
 
 
 def check_env() -> bool:
-    required = [
-        "MFS_URL",
-        "MFS_ALLOWED_SCOPES",
-        "OPENTAG_BACKEND",
-    ]
-    if env("SLACK_CHANNEL_POLICY") == "invited" and not env("MFS_ALLOWED_SCOPES"):
-        required.remove("MFS_ALLOWED_SCOPES")  # No channel yet: no memory sources.
+    required = ["OPENTAG_BACKEND"]
     required.extend(["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS"])
     all_ok = True
     for name in required:
@@ -139,43 +122,6 @@ def check_env() -> bool:
             ok = bool(user_ids)
             detail = f"{len(set(user_ids))} user(s)" if ok else "missing"
         print_check(ok, name, detail)
-        all_ok = all_ok and ok
-
-    mfs_token = token_from_env()
-    print_check(
-        bool(mfs_token),
-        "MFS_TOKEN or ~/.mfs/server.token",
-        "available" if mfs_token else "missing",
-    )
-    return all_ok and bool(mfs_token)
-
-
-def check_mfs(scopes: list[str]) -> bool:
-    base = env("MFS_URL").rstrip("/") or "http://127.0.0.1:13619"
-    token = token_from_env()
-    ok, data = request_json(f"{base}/healthz")
-    print_check(ok, "MFS healthz", data.get("status") or data.get("error", "reachable"))
-    if not ok:
-        print(f"       hint: MFS server is not reachable at {base}.")
-        print("       Install and start it first: uv tool install mfs-server && mfs-server run")
-    all_ok = ok
-
-    ok, data = request_json(f"{base}/v1/status", token=token)
-    connector_count = len(data.get("connectors") or []) if isinstance(data, dict) else 0
-    print_check(
-        ok,
-        "MFS /v1/status",
-        f"{connector_count} connectors" if ok else str(data.get("error")),
-    )
-    if ok and connector_count == 0:
-        print("       hint: no sources indexed yet. Add one with the mfs-ingest skill.")
-    all_ok = all_ok and ok
-
-    for scope in scopes:
-        params = urllib.parse.urlencode({"path": scope})
-        ok, data = request_json(f"{base}/v1/ls?{params}", token=token)
-        detail = "listed" if ok else str(data.get("error") or data.get("detail"))
-        print_check(ok, f"MFS scope {scope}", detail)
         all_ok = all_ok and ok
     return all_ok
 
@@ -301,16 +247,12 @@ def check_offline(root: Path) -> bool:
     """Validate a launch configuration without credentials or network access."""
     backend = env("OPENTAG_BACKEND")
     workspace = Path(env("OPENTAG_WORKDIR")).expanduser()
-    scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
     runtime_ok = check_runtime_dependencies()
     memory_ok = check_memory()
     checks = {
         "supported transport": (env("OPENTAG_TRANSPORT") or "slack") == "slack",
         "supported backend": backend in {"codex", "claude"},
         "agent workspace": workspace.is_dir(),
-        "MFS URL": env("MFS_URL").startswith(("http://", "https://")),
-        # A Tag following invitations has no sources until it's in a channel.
-        "MFS allowed scopes": bool(scopes) or env("SLACK_CHANNEL_POLICY") == "invited",
         "Slack allowed users": bool(
             [value for value in env("SLACK_ALLOWED_USER_IDS").split(",") if value.strip()]
         ),
@@ -343,11 +285,9 @@ def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
     if (env("OPENTAG_TRANSPORT") or "slack") != "slack":
         print_check(False, "OPENTAG_TRANSPORT", "must be slack")
         return 1
-    scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
     checks = [
         check_runtime_dependencies(),
         check_env(),
-        check_mfs(scopes) if scopes or env("SLACK_CHANNEL_POLICY") == "invited" else False,
         check_backend(),
         check_memory(),
     ]
@@ -360,7 +300,7 @@ def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
 
 def main() -> int:
     global CHECK_RESULTS
-    parser = argparse.ArgumentParser(description="Preflight a Tag chat + MFS setup.")
+    parser = argparse.ArgumentParser(description="Preflight a Tag's Slack and agent setup.")
     parser.add_argument("--channel-id", action="append", dest="channel_ids",
                         help="Slack channel ID to verify; repeat for multiple channels.")
     parser.add_argument("--json", action="store_true", help="emit structured checks without raw service responses")

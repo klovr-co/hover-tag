@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Keep chosen Tags running: each Tag remembers whether it should be on, and a
 small per-user login service starts those Tags and restarts them if they stop.
-The same service keeps the shared memory server (MFS) running while a kept Tag
-needs it or `tag memory start` asked for it, because Tags can't search without it.
 
 `tag start` and `tag stop` record the choice, so the CLI, Tag.app and the
 service always agree. The service is the operating system's own mechanism:
@@ -29,11 +27,8 @@ except ImportError:
     from scripts.tag_locks import LifecycleLock
 
 INTENT = "state/keep-running.json"
-# Beside the shared MFS record: whether `tag memory start` or `tag memory stop` came last.
-MEMORY_INTENT = "keep-running.json"
 LABEL = "team.hover.tag.supervisor"
 WINDOWS_VALUE = "Tag"
-DEFAULT_MFS_URL = "http://127.0.0.1:13619"
 CHECK_SECONDS = 60
 MAX_BACKOFF_SECONDS = 3600
 # A Tag that stays up this long has recovered; until then restarts back off,
@@ -75,39 +70,6 @@ def wanted(home: Path) -> bool | None:
 
 def set_wanted(home: Path, running: bool) -> None:
     _write_intent(home / INTENT, running)
-
-
-def memory_wanted(shared: Path) -> bool | None:
-    """Whether the person last started (True) or stopped (False) shared memory by hand."""
-    return _read_intent(shared / MEMORY_INTENT)
-
-
-def set_memory_wanted(shared: Path, running: bool) -> None:
-    _write_intent(shared / MEMORY_INTENT, running)
-
-
-def memory_needed(installation_root: Path, lifecycle) -> bool:
-    """Whether shared memory should be running, and Tag is the one to run it.
-
-    That is so when `tag memory start` was the last word, or a kept Tag needs
-    it. An endpoint Tag doesn't manage (a remote MFS) is never started here.
-    """
-    if memory_wanted(tag_instances.shared_mfs_home(installation_root)) is True:
-        return True
-    for item in tag_instances.discover(installation_root):
-        if not item.get("valid") or not Path(str(item["home"])).exists():
-            continue
-        home = tag_instances.resolve(installation_root, str(item["id"])).home
-        if wanted(home) is not True:
-            continue
-        settings = home / "config/settings.json"
-        try:
-            values = lifecycle.read_config(settings) if settings.is_file() else {}
-        except (OSError, ValueError):
-            values = {}
-        if lifecycle.local_mfs_endpoint(values.get("MFS_URL", DEFAULT_MFS_URL)):
-            return True
-    return False
 
 
 def _directories(path: str) -> list[str]:
@@ -520,16 +482,12 @@ def _release(installation_root: Path) -> str | None:
 
 
 class Supervisor:
-    """Start wanted Tags and shared memory that aren't running, backing off after failures."""
+    """Start wanted Tags that aren't running, backing off after failures."""
 
-    MEMORY = "memory"  # the key memory's backoff is kept under, beside the Tag IDs
-
-    def __init__(self, installation_root: Path, lifecycle, start, *, start_memory=None,
-                 clock=time.monotonic):
+    def __init__(self, installation_root: Path, lifecycle, start, *, clock=time.monotonic):
         self.root = installation_root
         self.lifecycle = lifecycle
         self.start = start  # (tag_id) -> exit code
-        self.start_memory = start_memory  # () -> exit code
         self.clock = clock
         self.failures: dict[str, int] = {}  # starts since the Tag was last stable
         self.retry_at: dict[str, float] = {}
@@ -551,19 +509,6 @@ class Supervisor:
                 attempted.append(tag_id)
                 self._attempt(tag_id, self.start)
         return attempted
-
-    def check_memory(self) -> bool:
-        """One pass over shared memory. Returns whether it tried to start it."""
-        if self.start_memory is None:
-            return False
-        if not memory_needed(self.root, self.lifecycle):
-            self._forget(self.MEMORY)
-            return False
-        running = self.lifecycle.process_for(tag_instances.shared_mfs_home(self.root) / "mfs.json") is not None
-        if not self._due(self.MEMORY, running):
-            return False
-        self._attempt(self.MEMORY, lambda _key: self.start_memory())
-        return True
 
     def _due(self, key: str, running: bool) -> bool:
         """Whether a wanted service that is `running` or not should be started now."""
@@ -625,12 +570,9 @@ def run(installation_root: Path, lifecycle, source_root: Path) -> int:
             return result.returncode
 
         supervisor = Supervisor(
-            installation_root, lifecycle, lambda tag_id: launch(tag_id, [tag_id, "start"]),
-            start_memory=lambda: launch("shared memory", ["memory", "start"]))
+            installation_root, lifecycle, lambda tag_id: launch(tag_id, [tag_id, "start"]))
         release = _release(installation_root)
         while True:
-            # Memory first: a Tag started below finds it already up.
-            supervisor.check_memory()
             supervisor.check()
             time.sleep(CHECK_SECONDS)
             if _release(installation_root) != release:

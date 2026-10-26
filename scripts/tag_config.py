@@ -7,20 +7,15 @@ import re
 import tempfile
 import unicodedata
 from pathlib import Path
-from urllib.parse import urlsplit
 
 try:
     import agent_permissions
     from agent_models import SUPPORTED_REASONING_EFFORTS
-    from mfs_scope_policy import canonical_uri, parse_scopes
     from tag_handoff import parse_peers
-    from opentag_process_env import parse_channel_scopes
 except ImportError:
     from scripts import agent_permissions
     from scripts.agent_models import SUPPORTED_REASONING_EFFORTS
-    from scripts.mfs_scope_policy import canonical_uri, parse_scopes
     from scripts.tag_handoff import parse_peers
-    from scripts.opentag_process_env import parse_channel_scopes
 
 DEFAULTS = {
     "OPENTAG_BACKEND": "codex", "OPENTAG_BOT_NAME": "Tag",
@@ -32,28 +27,23 @@ DEFAULTS = {
     "OPENTAG_SLACK_DM_ENABLED": "1", "OPENTAG_SHOW_THINKING": "1",
     "OPENTAG_FILE_DELIVERY": "local+slack",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "150000", "OPENTAG_THREAD_IDLE_HOURS": "4",
-    "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
 }
 BACKENDS = frozenset({"codex", "claude"})
 DEFAULT_MODEL_RE = re.compile(r"(?:codex|claude)(?::[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,99})?")
-REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
+REQUIRED = ("OPENTAG_BACKEND",
             "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS",
             "SLACK_TEAM_ID", "SLACK_APP_ID")
 # Unknown extension settings are preserved but never exposed by config show.
-PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
+PUBLIC = frozenset((*DEFAULTS, "OPENTAG_WORKDIR",
                     "SLACK_CHANNEL_ID", "SLACK_CHANNEL_IDS", "SLACK_TEAM_ID",
                     "SLACK_APP_ID", "SLACK_ALLOWED_USER_IDS", "SLACK_ENTERPRISE_ID",
                     "SLACK_CHANNEL_POLICY",
-                    "MFS_SLACK_HISTORY_DAYS",
-                    "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
                     "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
                     "OPENTAG_CODEX_SANDBOX", "OPENTAG_CODEX_APPROVALS", "OPENTAG_CODEX_REVIEWER",
-                    "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS", "MFS_CHANNEL_SCOPES"))
-EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
-    "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
-}
+                    "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS"))
+EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {"SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"}
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
     "OPENTAG_DEFAULT_MODEL": "Default model (codex:MODEL, claude:MODEL, or a backend)",
@@ -71,14 +61,8 @@ LABELS = {
     "SLACK_CHANNEL_IDS": "Selected channels", "SLACK_TEAM_ID": "Slack workspace",
     "SLACK_CHANNEL_POLICY": "Channel policy (selected or invited)",
     "SLACK_ENTERPRISE_ID": "Slack organization authorization",
-    "SLACK_APP_ID": "Slack app ID", "MFS_SLACK_TOKEN": "Slack history credential",
-    "MFS_ALLOWED_SCOPES": "Allowed memory sources", "MFS_URL": "Memory server",
-    "MFS_CHANNEL_SCOPES": "Extra memory sources per channel (JSON: channel ID to source URIs)",
-    "MFS_TOKEN": "Memory server token", "OPENTAG_TIMEOUT_SECONDS": "Agent idle timeout (seconds)",
+    "SLACK_APP_ID": "Slack app ID", "OPENTAG_TIMEOUT_SECONDS": "Agent idle timeout (seconds)",
     "OPENTAG_MAX_TIMEOUT_SECONDS": "Maximum task runtime (seconds)",
-    "MFS_SLACK_HISTORY_DAYS": "Slack history window (days)",
-    "MFS_SLACK_CONNECTOR_URI": "Slack history connector",
-    "MFS_SLACK_CONNECTOR_CONFIG": "Slack history connector config",
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
     "OPENTAG_SHOW_THINKING": "Show thinking summaries in Agent activity (1 on, 0 off)",
@@ -133,8 +117,9 @@ def read_config(path: Path) -> dict[str, str]:
         raise ValueError("Settings must contain valid JSON; repair the file before continuing") from None
     if not isinstance(value, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in value.items()):
         raise ValueError("TAG configuration must be a JSON object of string values")
+    # MFS_ keys are an earlier Tag's local Slack index settings; tag start removes them.
     if any(not re.fullmatch(r"(?:OPENTAG|SLACK|MFS)_[A-Z0-9_]+", k) for k in value):
-        raise ValueError("Configuration keys must start with OPENTAG_, SLACK_, or MFS_")
+        raise ValueError("Configuration keys must start with OPENTAG_ or SLACK_")
     return value
 
 
@@ -215,17 +200,11 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a positive integer"
     if key in {"OPENTAG_THREAD_MAX_CONTEXT_TOKENS", "OPENTAG_THREAD_IDLE_HOURS"} and (not value.isascii() or not value.isdigit()):
         return "Use 0 or a positive integer"
-    if key == "MFS_SLACK_HISTORY_DAYS" and value not in {"7", "30", "90"}:
-        return "Choose 7, 30, or 90 days"
-    if key == "MFS_SLACK_CONNECTOR_URI" and value and not value.startswith("slack://"):
-        return "Use a slack:// connector URI"
-    if key == "MFS_SLACK_CONNECTOR_CONFIG" and value and not Path(value).is_absolute():
-        return "Use an absolute connector configuration path"
     if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING"} and value not in {"0", "1"}:
         return "Use 0 or 1"
     if key == "SLACK_CHANNEL_POLICY" and value not in {"selected", "invited"}:
         return "Choose selected or invited"
-    if key in {"SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_SLACK_TOKEN"}:
+    if key in {"SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"}:
         prefix = "xapp-" if key == "SLACK_APP_TOKEN" else "xox"
         if not value.startswith(prefix) or len(value) <= len(prefix) or any(c.isspace() for c in value):
             return f"Enter a valid {prefix}- token issued by Slack"
@@ -247,43 +226,20 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a Slack organization ID starting with E"
     if key == "SLACK_APP_ID" and value and not re.fullmatch(r"A[A-Z0-9]+", value):
         return "Use a Slack App ID"
-    if key == "MFS_URL":
-        try:
-            url = urlsplit(value)
-            _ = url.port
-            valid = url.scheme in {"http", "https"} and url.hostname and not (url.username or url.password or url.query or url.fragment)
-        except ValueError:
-            valid = False
-        if not valid:
-            return "Use an http(s) server URL without credentials, query, or fragment"
-    if key == "MFS_ALLOWED_SCOPES":
-        try:
-            scopes = parse_scopes(value)
-            valid = bool(scopes) and all(canonical_uri(scope) is not None for scope in scopes)
-        except ValueError:
-            valid = False
-        if not valid:
-            return "Use comma-separated source URIs, such as file://local/path or slack://team"
-    if key == "MFS_CHANNEL_SCOPES" and value.strip():
-        try:
-            parse_channel_scopes(value)
-        except ValueError:
-            return 'Use a JSON object of Slack channel IDs to source URIs without commas, such as {"C0123ABCD": ["file://host/path"]}'
     return None
 
 
 def config_errors(values: dict[str, str]) -> dict[str, str]:
-    # A Tag that follows invitations may start with no channels, and so no
-    # memory sources yet: it picks up each channel it's invited to while it runs.
+    # A Tag that follows invitations may start with no channels: it picks up
+    # each channel it's invited to while it runs.
     no_channels = not (values.get("SLACK_CHANNEL_IDS", "").strip() or values.get("SLACK_CHANNEL_ID", "").strip())
     follows_invitations = values.get("SLACK_CHANNEL_POLICY") == "invited"
     waiting = no_channels and follows_invitations
-    errors = {key: "Required" for key in REQUIRED if not values.get(key, "").strip()
-              and not (waiting and key == "MFS_ALLOWED_SCOPES")}
+    errors = {key: "Required" for key in REQUIRED if not values.get(key, "").strip()}
     if no_channels and not follows_invitations:
         errors["SLACK_CHANNEL_IDS"] = "Select at least one Slack channel"
     for key, value in values.items():
-        if waiting and key in {"SLACK_CHANNEL_IDS", "MFS_ALLOWED_SCOPES"} and not value.strip():
+        if waiting and key == "SLACK_CHANNEL_IDS" and not value.strip():
             continue
         if key in EDITABLE and (error := validation_error(key, value)):
             errors[key] = error

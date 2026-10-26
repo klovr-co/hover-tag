@@ -18,21 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TagControlTests(unittest.TestCase):
-    def test_status_explains_indexing_cooldown(self):
-        self.complete()
-        with patch.object(tag_cli, "healthy", return_value=True), patch.object(
-            tag_cli, "slack_ready", return_value=False
-        ), patch.object(tag_control.tag_slack_backoff, "cooldown", return_value=130), patch.object(
-            tag_control.time, "time", return_value=100
-        ):
-            report = tag_control.inspect(self.home, tag_cli)
-        self.assertEqual(report["memory_sync"]["state"], "rate_limited")
-        self.assertEqual(report["memory_sync"]["retry_in_seconds"], 30)
-        with redirect_stdout(StringIO()) as output:
-            tag_control.show_status(report)
-        self.assertIn("Indexing paused by Slack; retrying in 30 seconds", output.getvalue())
-
-
     def test_config_show_targets_named_tag_settings(self):
         self.complete()
         with patch.object(tag_control.ui.display, "next_action") as next_action, redirect_stdout(StringIO()):
@@ -48,11 +33,11 @@ class TagControlTests(unittest.TestCase):
         self.complete()
         before = tag_config.read_config(self.path)
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
-            tag_control.ui, "choose", side_effect=[2, 6]
+            tag_control.ui, "choose", side_effect=[1, 5]
         ) as choose, patch.object(tag_control, "choose_default_model", return_value=None), redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
         self.assertEqual(before, tag_config.read_config(self.path))
-        self.assertEqual("AI & models", choose.call_args_list[0].args[1][2])
+        self.assertEqual("AI & models", choose.call_args_list[0].args[1][1])
 
     def test_settings_default_model_picker_uses_live_models_and_aligns_backend(self):
         self.complete()
@@ -71,7 +56,7 @@ class TagControlTests(unittest.TestCase):
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
             tag_control.agent_models, "discover_tag_models", side_effect=discover
         ), patch.object(tag_control.ui.display, "backend_status", return_value=("Signed in", True)), patch.object(
-            tag_control.ui, "choose", side_effect=[2, 3, 6]
+            tag_control.ui, "choose", side_effect=[1, 3, 5]
         ) as choose, redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
 
@@ -144,63 +129,20 @@ class TagControlTests(unittest.TestCase):
         self.assertIn("Settings closed", output.getvalue())
         self.assertEqual(self.path.read_bytes(), original)
 
-    def run_search_model_menu(self, picks, key="sk-test-synthetic"):
-        runs = []
-
-        def fake_run(command, **kwargs):
-            runs.append((command, kwargs))
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
+    def test_settings_have_no_memory_service_group(self):
+        self.complete()
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
-            tag_control.ui, "choose", side_effect=picks
-        ), patch.object(tag_control.getpass, "getpass", return_value=key), patch.object(
-            tag_control.subprocess, "run", side_effect=fake_run
-        ), redirect_stdout(StringIO()) as output:
+            tag_control.ui, "choose", side_effect=[5]
+        ) as choose, redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
-        return runs, output.getvalue()
-
-    def test_settings_can_point_memory_at_a_custom_endpoint_without_putting_the_key_in_the_command(self):
-        self.complete()
-        # Workspace and memory → Search model → Custom → confirm → Back
-        with patch("builtins.input", side_effect=["https://api.example.invalid/v1", "embed-x"]):
-            runs, output = self.run_search_model_menu([1, 4, 1, 0, 6])
-        self.assertEqual(len(runs), 1)
-        command, kwargs = runs[0]
-        self.assertEqual(command[command.index("embedding"):],
-                         ["embedding", "custom", "--base-url", "https://api.example.invalid/v1",
-                          "--embedding-model", "embed-x", "--stdin", "--json"])
-        self.assertNotIn("sk-test-synthetic", " ".join(command))
-        self.assertEqual(kwargs["input"], "sk-test-synthetic\n")
-        self.assertNotIn("sk-test-synthetic", output)
-
-    def test_settings_can_switch_memory_back_to_the_default(self):
-        self.complete()
-        runs, _ = self.run_search_model_menu([1, 4, 0, 0, 6])
-        command, kwargs = runs[0]
-        self.assertEqual(command[command.index("embedding"):], ["embedding", "local", "--json"])
-        self.assertIsNone(kwargs["input"])
-
-    def test_settings_label_shows_a_running_model_download(self):
-        shared = self.home / "shared/mfs"
-        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}):
-            self.assertEqual(tag_control._search_model_label(), "Default")
-            tag_control.tag_model_download.write(shared, "downloading", model="bge-m3", done=1, total=4, pid=os.getpid())
-            self.assertEqual(tag_control._search_model_label(), "Default (downloading 25%, search off)")
-            tag_control.tag_model_download.write(shared, "ready", model="bge-m3", done=4, total=4)
-            self.assertEqual(tag_control._search_model_label(), "Default")
-
-    def test_settings_search_model_cancel_changes_nothing(self):
-        self.complete()
-        runs, _ = self.run_search_model_menu([1, 4, 2, 6])
-        self.assertEqual(runs, [])
-        with patch("builtins.input", side_effect=["https://api.example.invalid/v1", "embed-x"]):
-            runs, _ = self.run_search_model_menu([1, 4, 1, 1, 6])
-        self.assertEqual(runs, [])
+        groups = choose.call_args_list[0].args[1]
+        self.assertEqual(["Slack connection and access", "AI & models", "Advanced", "API connections",
+                          "Usage and budget", "Back"], groups)
 
     def test_settings_plain_number_navigation_still_works(self):
         self.complete()
         with patch.object(tag_control.ui, "keyboard_available", return_value=False), patch(
-            "builtins.input", side_effect=["3", "1", "0"]
+            "builtins.input", side_effect=["2", "1", "0"]
         ), patch.object(tag_control.agent_models, "discover_tag_models", return_value=[
             agent_models.ModelOption("opus", "Opus", (), backend="claude"),
         ]), redirect_stdout(StringIO()):
@@ -224,17 +166,9 @@ class TagControlTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
 
     def complete(self, backend="codex"):
-        connector = self.home / "integrations/tag-ttest.toml"
-        connector.parent.mkdir(parents=True, exist_ok=True)
-        connector.write_text(opentag_setup.render_slack_connector("TTEST", [
-            opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)
-        ], "30"), encoding="utf-8")
-        values = dict(tag_config.DEFAULTS, OPENTAG_BACKEND=backend,
-                      MFS_ALLOWED_SCOPES="slack://tag-ttest/channels/team__CTEST", SLACK_APP_TOKEN="xapp-fixture",
+        values = dict(tag_config.DEFAULTS, OPENTAG_BACKEND=backend, SLACK_APP_TOKEN="xapp-fixture",
                       SLACK_BOT_TOKEN="xoxb-fixture", SLACK_ALLOWED_USER_IDS="UOWNER",
-                      SLACK_TEAM_ID="TTEST", SLACK_APP_ID="ATEST", SLACK_CHANNEL_IDS="CTEST",
-                      MFS_SLACK_TOKEN="xoxb-history", MFS_SLACK_CONNECTOR_URI="slack://tag-ttest",
-                      MFS_SLACK_CONNECTOR_CONFIG=str(connector))
+                      SLACK_TEAM_ID="TTEST", SLACK_APP_ID="ATEST", SLACK_CHANNEL_IDS="CTEST")
         tag_config.save_config(self.path, values)
         return values
 
@@ -313,7 +247,8 @@ class TagControlTests(unittest.TestCase):
         values = tag_config.read_config(self.path)
         self.assertEqual(values["OPENTAG_BACKEND"], "claude")
         self.assertEqual(values["OPENTAG_TIMEOUT_SECONDS"], "900")
-        self.assertEqual(values["MFS_URL"], tag_config.DEFAULTS["MFS_URL"])
+        self.assertEqual(values["OPENTAG_TRANSPORT"], tag_config.DEFAULTS["OPENTAG_TRANSPORT"])
+        self.assertNotIn("MFS_URL", values)
 
     def test_atomic_failure_does_not_truncate_config(self):
         self.complete()
@@ -390,12 +325,12 @@ class TagControlTests(unittest.TestCase):
         ) as finish, redirect_stdout(StringIO()) as output:
             self.assertEqual(opentag_setup.guided_setup(self.path, start_services=False), 0)
         finish.assert_not_called()
-        self.assertIn("no history was indexed", output.getvalue())
+        self.assertIn("No services were started", output.getvalue())
 
     def test_setup_uses_visual_picker_when_channel_is_missing(self):
         values = self.complete()
         del values["SLACK_CHANNEL_IDS"]
-        values["MFS_ALLOWED_SCOPES"] = "slack://tag-ttest/channels/team__CTEST"
+        values["SLACK_CHANNEL_POLICY"] = "selected"
         tag_config.save_config(self.path, values)
         selected = [opentag_setup.slack_channels.SlackChannel("CTEAM", "team", False, True)]
         with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
@@ -405,7 +340,7 @@ class TagControlTests(unittest.TestCase):
             opentag_setup.slack_channels, "setup_channels", return_value=selected
         ) as picker, patch.object(
             opentag_setup.slack_channels, "slack_api", return_value={"ok": True}
-        ), patch.object(opentag_setup, "write_slack_connector", return_value=Path(values["MFS_SLACK_CONNECTOR_CONFIG"])), patch(
+        ), patch(
             "builtins.input", side_effect=[]
         ), patch.object(
             opentag_setup, "finish_setup", return_value=0
@@ -413,7 +348,7 @@ class TagControlTests(unittest.TestCase):
             self.assertEqual(opentag_setup.guided_setup(self.path), 0)
 
         self.assertEqual(picker.call_args.args, ("xoxb-fixture", ""))
-        # A Tag with selected-channel memory keeps needing at least one channel.
+        # A Tag that answers in selected channels keeps needing at least one.
         self.assertEqual(picker.call_args.kwargs, {"app_id": "ATEST", "tag_name": "Tag", "allow_empty": False})
         self.assertEqual(tag_config.read_config(self.path)["SLACK_CHANNEL_IDS"], "CTEAM")
 
@@ -447,8 +382,6 @@ class TagControlTests(unittest.TestCase):
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.slack_channels, "setup_channels", side_effect=opentag_setup.ui.Paused
         ), patch.object(
-            opentag_setup, "write_slack_connector"
-        ) as connector, patch.object(
             opentag_setup, "finish_setup"
         ) as start, patch.object(
             opentag_setup.subprocess,
@@ -457,7 +390,6 @@ class TagControlTests(unittest.TestCase):
         ) as run, redirect_stdout(StringIO()):
             with self.assertRaises(opentag_setup.ui.Paused):
                 opentag_setup.guided_setup(self.path)
-        connector.assert_not_called()
         start.assert_not_called()
         run.assert_not_called()
 
@@ -491,10 +423,6 @@ class TagControlTests(unittest.TestCase):
                 ), patch.object(
                     tag_cli, "missing_runtime_dependencies", return_value=()
                 ), patch.object(slack_manifest_migrations, "reconcile", side_effect=refresh_credentials
-                ), patch.object(tag_cli, "healthy", return_value=True
-                ), patch.object(tag_cli, "replace_unmanaged_local_mfs", return_value=False
-                ), patch.object(tag_cli, "sync_configured_slack_memory"
-                ), patch.object(tag_cli, "wait_for_configured_mfs_scopes", return_value=[]
                 ), patch.object(tag_cli, "doctor_report", side_effect=check_refreshed_credentials), patch.object(
                     tag_cli, "slack_ready", side_effect=[False, True]
                 ), patch.object(tag_cli, "stop_process"), patch.object(
@@ -503,8 +431,7 @@ class TagControlTests(unittest.TestCase):
                     self.assertEqual(tag_cli.main(), 0)
                 command = start.call_args.args[2]
                 self.assertEqual(command[command.index("--backend") + 1], backend)
-                self.assertIn("Waiting for the service to become healthy", output.getvalue())
-                self.assertIn("Checking which channels are imported", output.getvalue())
+                self.assertNotIn("Waiting for the service to become healthy", output.getvalue())
                 self.assertIn("Waiting for the connection to become ready", output.getvalue())
                 self.assertIn("Tag is connected", output.getvalue())
                 self.assertNotIn("[ok]", output.getvalue())
@@ -512,7 +439,7 @@ class TagControlTests(unittest.TestCase):
                 self.assertEqual(self.welcome.call_args.args[1]["SLACK_BOT_TOKEN"], "xoxb-refreshed")
 
     def test_welcome_waits_for_readiness_and_failure_keeps_tag_running(self):
-        for failure in ("memory", "preflight", "slack", "welcome", None):
+        for failure in ("preflight", "slack", "welcome", None):
             with self.subTest(failure=failure):
                 self.complete()
                 self.welcome.reset_mock()
@@ -521,10 +448,7 @@ class TagControlTests(unittest.TestCase):
                 with patch.object(sys, "argv", ["tag", "start"]), patch.object(tag_cli, "_rename", return_value=None), patch.object(
                     tag_cli, "missing_runtime_dependencies", return_value=()
                 ), patch.object(slack_manifest_migrations, "reconcile", return_value=False), patch.object(
-                    tag_cli, "ensure_shared_memory"
-                ), patch.object(tag_cli, "sync_configured_slack_memory"), patch.object(
-                    tag_cli, "wait_for_configured_mfs_scopes", return_value=["slack://unavailable"] if failure == "memory" else []
-                ), patch.object(tag_cli, "doctor_report", return_value=(int(failure == "preflight"), {"checks": []})), patch.object(
+                    tag_cli, "doctor_report", return_value=(int(failure == "preflight"), {"checks": []})), patch.object(
                     tag_cli, "slack_ready", side_effect=RuntimeError("disconnected") if failure == "slack" else None,
                     return_value=True
                 ), patch.object(tag_cli, "stop_process") as stop, redirect_stdout(StringIO()) as output:
@@ -540,42 +464,6 @@ class TagControlTests(unittest.TestCase):
                         self.assertNotIn("xoxb-do-not-print", output.getvalue())
                         if failure == "welcome":
                             self.assertIn("Could not confirm delivery", output.getvalue())
-                        if failure == "memory":
-                            # A channel still importing doesn't hold the start back.
-                            self.assertIn("in the background", output.getvalue())
-
-    def test_start_allows_mfs_cold_initialization_beyond_thirty_seconds(self):
-        self.complete()
-        tag_cli.initialize_instance(self.home)
-        health_checks = [False, *([False] * 31), True]
-        with patch.object(sys, "argv", ["tag", "start"]), patch.object(
-            tag_cli, "missing_runtime_dependencies", return_value=()
-        ), patch.object(
-            slack_manifest_migrations, "reconcile", return_value=False
-        ), patch.object(
-            tag_cli, "replace_unmanaged_local_mfs", return_value=False
-        ), patch.object(
-            tag_cli, "mfs_server_executable", return_value="/fixture/mfs-server"
-        ), patch.object(
-            tag_cli, "start_process", return_value=True
-        ), patch.object(
-            tag_cli, "process_for", return_value=object()
-        ), patch.object(
-            tag_cli, "healthy", side_effect=health_checks
-        ), patch.object(
-            tag_cli.time, "sleep"
-        ), patch.object(
-            tag_cli, "sync_configured_slack_memory"
-        ), patch.object(
-            tag_cli, "wait_for_configured_mfs_scopes", return_value=[]
-        ), patch.object(
-            tag_cli, "doctor_report", return_value=(0, {"checks": []})
-        ), patch.object(
-            tag_cli, "slack_ready", return_value=True
-        ), patch.object(tag_cli, "stop_process"), patch.object(
-            tag_cli.tag_mfs_runtime, "active", return_value=True
-        ), redirect_stdout(StringIO()):
-            self.assertEqual(tag_cli.main(), 0)
 
     def test_doctor_json_suppresses_raw_response_details(self):
         def checks(*args):

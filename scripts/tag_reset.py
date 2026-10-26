@@ -88,32 +88,6 @@ def delete_slack_app(home: Path, backup: Path, app: dict, executable: str, *, so
     return confirmed
 
 
-def unregister_connector(home: Path, values: dict[str, str]) -> str:
-    """Remove only this instance's registered connector from shared MFS.
-
-    Returns "removed", or "queued" when memory isn't running: Tag then removes it the next time memory starts.
-    """
-    uri = values.get("MFS_SLACK_CONNECTOR_URI", "").strip()
-    if not uri:
-        return "removed"
-    try:
-        import tag_cli
-        from tag_paths import tag_home
-    except ImportError:
-        from scripts import tag_cli
-        from scripts.tag_paths import tag_home
-    environment = {**os.environ, **values}
-    try:
-        tag_cli.mfs_remove_connector(uri, environment)
-    except tag_cli.MfsUnreachable:
-        tag_cli.queue_connector_removal(tag_home() / "shared/mfs", uri,
-                                        environment.get("MFS_URL", "http://127.0.0.1:13619"))
-        return "queued"
-    except RuntimeError as error:
-        raise RuntimeError(f"The Slack history connector could not be removed; setup was not reset. {error}") from None
-    return "removed"
-
-
 def archive_setup(home: Path, lifecycle, *, expected_app: dict | None = None) -> Path:
     """Serialize with starts/settings writes and move exact setup targets to backup."""
     lifecycle.initialize_instance(home)
@@ -148,11 +122,6 @@ def archive_setup(home: Path, lifecycle, *, expected_app: dict | None = None) ->
         # Use the same identity-checked lifecycle as `tag stop`. A failure leaves
         # saved answers intact and never starts a second onboarding flow.
         lifecycle.stop_process(home, "slack")
-        try:
-            values = settings.load_config(config)
-        except (OSError, ValueError):
-            values = {}
-        unregister_connector(home, values)
         backup_root = home / "config/backups"
         backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -184,8 +153,7 @@ def reset_and_setup(home: Path, lifecycle) -> int:
               target_detail(home) + "\n"
               "Tag will stop its Slack bridge and back up saved answers and local Slack app-link checkpoints. "
               "Then setup will start from the beginning.\n"
-              "Your workspace, skills, connector files, and CLI sign-ins are kept. "
-              "This Tag's Slack history connector and its indexed records are removed from shared memory. "
+              "Your workspace, skills, memory, connector files, and CLI sign-ins are kept. "
               "Deleting the Slack app is optional and requires a separate confirmation.",
               footer=f"Settings: {settings.config_path(home)}")
     try:

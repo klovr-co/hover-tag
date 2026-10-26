@@ -86,8 +86,8 @@ def _public_labels() -> frozenset[str]:
         {"type": "dynamicToolCall"},
     ]
     examples.extend({"type": "commandExecution", "command": command} for command in (
-        "cat file", "cp source destination", "pytest", "python mfs_search.py query",
-        "python mfs_cat.py path", "python mfs_ls.py", "python slack_canvas.py",
+        "cat file", "cp source destination", "pytest", "python slack_search.py search query",
+        "python slack_canvas.py",
         "python slack_post_message.py", "create-document.py", "unknown-command",
     ))
     labels = {label for item in examples if (label := activity_label(item))}

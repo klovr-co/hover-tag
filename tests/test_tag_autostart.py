@@ -40,29 +40,6 @@ class IntentTests(unittest.TestCase):
         self.assertIsNone(autostart.wanted(self.home))
 
 
-class MemoryIntentTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.shared = Path(self.temporary.name) / "shared/mfs"
-
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    def test_no_choice_is_recorded_until_memory_is_started_or_stopped(self) -> None:
-        self.assertIsNone(autostart.memory_wanted(self.shared))
-
-    def test_choice_round_trips_and_overwrites(self) -> None:
-        autostart.set_memory_wanted(self.shared, True)
-        self.assertTrue(autostart.memory_wanted(self.shared))
-        autostart.set_memory_wanted(self.shared, False)
-        self.assertFalse(autostart.memory_wanted(self.shared))
-
-    def test_unreadable_choice_counts_as_unrecorded(self) -> None:
-        self.shared.mkdir(parents=True)
-        (self.shared / autostart.MEMORY_INTENT).write_text("{not json", encoding="utf-8")
-        self.assertIsNone(autostart.memory_wanted(self.shared))
-
-
 class InstallationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -144,126 +121,11 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(supervisor.failures, {})
 
 
-class MemorySupervisionTests(unittest.TestCase):
-    """The login service restarts shared MFS as well as the Tags."""
-
+class LoginServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name) / "tag-home"
-        self.first = tag_instances.create(self.root, "first").home
-        self.shared = tag_instances.shared_mfs_home(self.root)
-        self.memory_running = False
-        self.tags_running: set[Path] = set()
-        self.settings: dict[str, str] = {}
-        self.lifecycle = Mock()
-        self.lifecycle.process_for.side_effect = self.process_for
-        self.lifecycle.read_config.side_effect = lambda _path: dict(self.settings)
-        self.lifecycle.local_mfs_endpoint.side_effect = tag_cli.local_mfs_endpoint
-        (self.first / "config").mkdir(exist_ok=True)
-        (self.first / "config/settings.json").write_text("{}", encoding="utf-8")
-        self.now = [0.0]
-        self.start = Mock(return_value=0)
-        self.start_memory = Mock(return_value=0)
-
-    def process_for(self, path: Path):
-        if path == self.shared / "mfs.json":
-            return object() if self.memory_running else None
-        return object() if path.parent.parent in self.tags_running else None
-
-    def supervisor(self) -> autostart.Supervisor:
-        return autostart.Supervisor(self.root, self.lifecycle, self.start,
-                                    start_memory=self.start_memory, clock=lambda: self.now[0])
-
-    def test_memory_is_restarted_when_a_kept_tag_needs_it(self) -> None:
-        autostart.set_wanted(self.first, True)
-        self.tags_running = {self.first}  # the bridge is still up; only MFS died
-        supervisor = self.supervisor()
-        self.assertTrue(supervisor.check_memory())
-        self.start_memory.assert_called_once_with()
-        self.memory_running = True
-        self.assertFalse(supervisor.check_memory())
-        self.start_memory.assert_called_once_with()
-
-    def test_memory_started_by_hand_is_kept_even_with_no_tags(self) -> None:
-        # `tag memory start` with no working Tag, then MFS dies.
-        autostart.set_memory_wanted(self.shared, True)
-        self.assertTrue(self.supervisor().check_memory())
-
-    def test_memory_nobody_asked_for_is_left_alone(self) -> None:
-        autostart.set_wanted(self.first, False)
-        self.assertFalse(self.supervisor().check_memory())
-        autostart.set_memory_wanted(self.shared, False)
-        self.assertFalse(self.supervisor().check_memory())
-        self.start_memory.assert_not_called()
-
-    def test_stopping_memory_on_purpose_wins_over_a_stopped_tags_leftovers(self) -> None:
-        autostart.set_memory_wanted(self.shared, False)
-        self.assertFalse(self.supervisor().check_memory())
-
-    def test_an_external_memory_server_is_never_started(self) -> None:
-        autostart.set_wanted(self.first, True)
-        self.settings = {"MFS_URL": "https://memory.example.com"}
-        self.assertFalse(self.supervisor().check_memory())
-        self.start_memory.assert_not_called()
-
-    def test_failed_restarts_back_off_and_recover(self) -> None:
-        autostart.set_memory_wanted(self.shared, True)
-        self.start_memory.return_value = 1
-        supervisor = self.supervisor()
-        self.assertTrue(supervisor.check_memory())
-        self.assertFalse(supervisor.check_memory())  # waiting
-        self.now[0] = autostart.CHECK_SECONDS * 2
-        self.assertTrue(supervisor.check_memory())
-        self.now[0] += autostart.CHECK_SECONDS * 2  # a second failure doubles the wait
-        self.assertFalse(supervisor.check_memory())
-        self.now[0] += autostart.MAX_BACKOFF_SECONDS
-        self.start_memory.return_value = 0
-        self.assertTrue(supervisor.check_memory())
-        self.memory_running = True
-        self.now[0] += autostart.STABLE_SECONDS
-        supervisor.check_memory()
-        self.assertEqual(supervisor.failures, {})
-
-    def test_memory_that_dies_right_after_starting_backs_off(self) -> None:
-        # The store is unreachable: MFS starts, then exits at once.
-        autostart.set_memory_wanted(self.shared, True)
-        supervisor = self.supervisor()
-        attempts = 0
-        for _ in range(30):  # 30 minutes of checks
-            attempts += supervisor.check_memory()
-            self.now[0] += autostart.CHECK_SECONDS
-        self.assertLessEqual(attempts, 5)
-
-    def test_tags_and_memory_do_not_share_backoff(self) -> None:
-        autostart.set_wanted(self.first, True)
-        autostart.set_memory_wanted(self.shared, True)
-        self.start_memory.return_value = 1
-        supervisor = self.supervisor()
-        supervisor.check_memory()
-        self.assertEqual(supervisor.check(), ["first"])
-
-    def test_the_login_service_checks_memory_before_the_tags(self) -> None:
-        order: list[str] = []
-
-        class Stop(Exception):
-            pass
-
-        class Recording:
-            def __init__(self, *_args, **_kwargs) -> None:
-                pass
-
-            def check_memory(self) -> None:
-                order.append("memory")
-
-            def check(self) -> None:
-                order.append("tags")
-                raise Stop
-
-        with patch.object(autostart, "Supervisor", Recording), patch.object(autostart, "ensure_linger"), \
-                redirect_stdout(StringIO()), self.assertRaises(Stop):
-            autostart.run(self.root, Mock(), Path(self.temporary.name) / "source")
-        self.assertEqual(order, ["memory", "tags"])
+        self.root = Path(self.temporary.name) / "Tag"
 
     def test_the_login_service_turns_linger_on_once_and_logs_what_is_left_to_do(self) -> None:
         class Stop(Exception):
@@ -273,7 +135,7 @@ class MemorySupervisionTests(unittest.TestCase):
             def __init__(self, *_args, **_kwargs) -> None:
                 pass
 
-            def check_memory(self) -> None:
+            def check(self) -> None:
                 raise Stop
 
         output = StringIO()
@@ -285,28 +147,21 @@ class MemorySupervisionTests(unittest.TestCase):
         ensure.assert_called_once_with("systemd")
         self.assertIn("sudo loginctl enable-linger ops", output.getvalue())
 
-    def test_the_login_service_starts_memory_with_the_tool_path(self) -> None:
-        captured = {}
-
+    def test_the_login_service_starts_only_tags(self) -> None:
         class Stop(Exception):
             pass
 
         class OneCheck:
-            def __init__(self, _root, _lifecycle, _start, *, start_memory) -> None:
-                captured["start_memory"] = start_memory
+            def __init__(self, _root, _lifecycle, _start, **options) -> None:
+                self.options = options
 
-            def check_memory(self) -> None:
-                captured["start_memory"]()
+            def check(self) -> None:
                 raise Stop
 
-        finished = Mock(returncode=0, stdout="", stderr="")
         with patch.object(autostart, "Supervisor", OneCheck), patch.object(autostart, "ensure_linger"), \
-                patch.object(autostart.subprocess, "run", return_value=finished) as run, \
                 redirect_stdout(StringIO()), self.assertRaises(Stop):
             autostart.run(self.root, Mock(), Path(self.temporary.name) / "source")
-        command = run.call_args.args[0]
-        self.assertEqual(command[-2:], ["memory", "start"])
-        self.assertEqual(run.call_args.kwargs["env"][autostart.SUPERVISED_ENV], "1")
+        self.assertFalse(hasattr(autostart, "memory_needed"))
 
 
 class LingerTests(unittest.TestCase):
@@ -413,9 +268,6 @@ class ToolPathTests(unittest.TestCase):
         class OneCheck:
             def __init__(self, _root, _lifecycle, start, **_options) -> None:
                 self.start = start
-
-            def check_memory(self) -> None:
-                pass
 
             def check(self) -> None:
                 self.start("first")
@@ -646,46 +498,14 @@ class CommandTests(unittest.TestCase):
         with self.assertRaises(SystemExit), redirect_stdout(StringIO()), patch("sys.stderr", StringIO()):
             self.cli("autostart", "keep")
 
-    def test_starting_memory_by_hand_keeps_it_running(self) -> None:
-        shared = tag_instances.shared_mfs_home(self.root)
-        with patch.object(tag_cli, "ensure_shared_memory"):
-            self.assertEqual(self.cli("memory", "start")[0], 0)
-        self.assertTrue(autostart.memory_wanted(shared))
-
-    def test_stopping_memory_leaves_it_off(self) -> None:
-        shared = tag_instances.shared_mfs_home(self.root)
-        autostart.set_memory_wanted(shared, True)
-        with patch.object(tag_cli, "ensure_shared_memory"):
-            self.cli("memory", "start")
-        with patch.object(tag_cli, "stop_process"), \
-                patch.object(tag_cli, "process_for", return_value=object()), \
-                patch.object(tag_cli, "bridge_processes", return_value=[]):
-            self.assertEqual(self.cli("memory", "stop")[0], 0)
-        self.assertFalse(autostart.memory_wanted(shared))
-
-    def test_a_supervised_memory_start_never_changes_the_choice(self) -> None:
-        shared = tag_instances.shared_mfs_home(self.root)
-        autostart.set_memory_wanted(shared, False)
-        with patch.dict(os.environ, {autostart.SUPERVISED_ENV: "1"}), \
-                patch.object(tag_cli, "ensure_shared_memory"):
-            self.assertEqual(self.cli("memory", "start")[0], 0)
-        self.assertFalse(autostart.memory_wanted(shared))
-
-    def test_status_reports_whether_memory_is_kept_running(self) -> None:
+    def test_status_keeps_the_memory_field_for_older_apps(self) -> None:
         autostart.set_wanted(self.home, True)
         with patch.object(autostart, "mechanism", return_value="launchd"), \
                 patch.object(autostart.Path, "home", return_value=self.root / "user"):
             result = json.loads(self.cli("autostart", "--json")[1])
-        self.assertEqual(result["memory"], {"keep_running": True})
+        # There is no memory service any more; older apps still read the field.
+        self.assertEqual(result["memory"], {"keep_running": False})
         self.assertNotIn("linger", result)  # launchd has no such setting
-
-    def test_memory_status_says_whether_it_is_restarted(self) -> None:
-        shared = tag_instances.shared_mfs_home(self.root)
-        with patch.object(tag_cli, "healthy", return_value=False):
-            self.assertFalse(json.loads(self.cli("memory", "status", "--json")[1])["keep_running"])
-            autostart.set_memory_wanted(shared, True)
-            self.assertTrue(json.loads(self.cli("memory", "status", "--json")[1])["keep_running"])
-            self.assertIn("Kept running", self.cli("memory", "status")[1])
 
     def test_a_missing_linger_setting_is_reported_with_the_command(self) -> None:
         with patch.object(autostart, "mechanism", return_value="systemd"), \

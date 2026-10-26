@@ -41,10 +41,6 @@ class InstanceContext:
         return self.tag_id == DEFAULT_TAG
 
     @property
-    def shared_mfs_home(self) -> Path:
-        return shared_mfs_home(self.installation_root)
-
-    @property
     def workspace(self) -> Path:
         return workspace_home(self.home, self.installation_root, self.tag_id)
 
@@ -66,11 +62,6 @@ class InstanceContext:
 
     def command_arguments(self, action: str) -> list[str]:
         return [action] if self.is_main else [self.tag_id, action]
-
-
-def shared_mfs_home(installation_root: Path) -> Path:
-    """The state folder of the managed MFS that every Tag in an installation shares."""
-    return installation_root / "shared/mfs"
 
 
 def validate_name(name: str, *, allow_default: bool = True, existing: bool = False) -> str:

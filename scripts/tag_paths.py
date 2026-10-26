@@ -137,7 +137,7 @@ def initialize_workspace(workspace: Path) -> None:
 def initialize(home: Path) -> None:
     """Create installation-wide paths, never instance-owned mutable data."""
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
-    for name in ("releases", "instances", "shared/mfs", "state", "bin"):
+    for name in ("releases", "instances", "shared", "state", "bin"):
         (home / name).mkdir(parents=True, exist_ok=True, mode=0o700)
     restrict_windows_acl(home)
 
