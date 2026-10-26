@@ -201,7 +201,7 @@
           {
             "value": "0",
             "label": "Off",
-            "detail": "Claude has no browser."
+            "detail": "Turns off Claude in Chrome. Browser tools from the Tag's MCP servers still work."
           },
           {
             "value": "1",

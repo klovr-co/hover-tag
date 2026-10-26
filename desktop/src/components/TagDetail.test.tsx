@@ -203,7 +203,7 @@ describe("Tag detail", () => {
     const claude = await screen.findByRole("region", { name: "Claude permissions" }, { timeout: 5000 });
     const chrome = within(claude).getByRole("radiogroup", { name: "Chrome" });
     expect(within(chrome).getByRole("radio", { name: "Off" }).getAttribute("aria-checked")).toBe("true");
-    expect(within(claude).getByText("Claude has no browser.")).toBeTruthy();
+    expect(within(claude).getByText("Turns off Claude in Chrome. Browser tools from the Tag's MCP servers still work.")).toBeTruthy();
     fireEvent.click(within(chrome).getByRole("radio", { name: "On" }));
     const warning = within(claude).getByText("Uses this computer's signed-in Chrome. Anyone who can ask the Tag can ask it to act there.");
     expect(warning.closest("p")?.className).toContain("mwarn");

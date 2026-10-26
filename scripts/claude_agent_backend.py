@@ -766,11 +766,10 @@ class ClaudeAgentRun:
         if show_thinking():
             # Newer models omit thinking text unless asked; summaries are all the API offers.
             extra_args["thinking-display"] = "summarized"
-        if chrome:
-            # Claude in Chrome is off unless the CLI starts with --chrome; its tool calls still ask in Slack.
-            extra_args["chrome"] = None
-        if extra_args:
-            kwargs["extra_args"] = extra_args
+        # Off passes --no-chrome too: Claude Code's own "enabled by default" would otherwise connect.
+        # When on, browser tool calls still ask in Slack.
+        extra_args["chrome" if chrome else "no-chrome"] = None
+        kwargs["extra_args"] = extra_args
         if self.resume_session_id:
             kwargs["resume"] = self.resume_session_id
         kwargs.update(run_limits(os.environ))
@@ -788,7 +787,7 @@ class ClaudeAgentRun:
                           system_prompt=self.text_only_instructions,
                           env={**text_only_environment(os.environ), **CLAUDE_NATIVE_MEMORY_ENV},
                           extra_args={"strict-mcp-config": None, "disable-slash-commands": None,
-                                      "no-session-persistence": None},
+                                      "no-session-persistence": None, "no-chrome": None},
                           settings=json.dumps({"disableAllHooks": True}))
         return options_factory(**kwargs)
 

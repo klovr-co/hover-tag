@@ -50,7 +50,7 @@ CLAUDE_MODE: tuple[Option, ...] = (
     ("bypassPermissions", "Bypass permissions", "Skips approvals. Only deny rules and hooks can stop it."),
 )
 CLAUDE_CHROME: tuple[Option, ...] = (
-    ("0", "Off", "Claude has no browser."),
+    ("0", "Off", "Turns off Claude in Chrome. Browser tools from the Tag's MCP servers still work."),
     ("1", "On", "Uses this computer's signed-in Chrome. Anyone who can ask the Tag can ask it to act there."),
 )
 # Setting, its options, and the default when unset. Unset Codex approvals send
