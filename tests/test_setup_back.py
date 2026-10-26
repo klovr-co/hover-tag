@@ -173,16 +173,22 @@ class SetupBackTests(unittest.TestCase):
 
     def test_a_stopped_setup_keeps_why_in_the_setup_log(self):
         with tempfile.TemporaryDirectory() as directory:
-            config = Path(directory) / "config/settings.json"
+            # The CLI selects the Tag home; --config may live anywhere, as it does here.
+            home = Path(directory) / "home"
+            config = Path(directory) / "settings.json"
             tag_config.save_config(config, {"OPENTAG_BOT_NAME": "Maya's Tag"})
-            log = Path(directory) / "state/setup.log"
+            log = home / "state/setup.log"
+            log.parent.mkdir(parents=True)
+            log.write_text("", encoding="utf-8")
+            if os.name != "nt":
+                log.chmod(0o644)  # An earlier log that isn't private yet.
             failures = [RuntimeError("The setup client chose an option that was not offered"), KeyError("workspace")]
 
             def guided(_path, **_):
                 raise failures.pop(0)
 
             with patch.object(sys, "argv", ["opentag_setup.py", "--config", str(config), "--review"]), patch.dict(
-                os.environ, {setup_ui.PROTOCOL_ENV: "jsonl", "TAG_HOME": directory}
+                os.environ, {setup_ui.PROTOCOL_ENV: "jsonl", "TAG_HOME": directory, "TAG_INSTANCE_HOME": str(home)}
             ), patch.object(opentag_setup, "guided_setup", side_effect=guided), patch.object(
                 opentag_setup.tag_telemetry, "SetupSession"
             ), patch.object(sys, "stdout", StringIO()), patch.object(sys, "stderr", StringIO()) as stderr:

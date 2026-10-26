@@ -2127,15 +2127,15 @@ def main() -> int:
     except (OSError, ValueError, RuntimeError) as exc:
         if telemetry_session:
             telemetry_session.abandon()
-        log_setup_failure(config_path)
+        log_setup_failure()
         print(f"Setup could not continue: {exc}", file=sys.stderr)
         return 1
     except Exception:
-        log_setup_failure(config_path)
+        log_setup_failure()
         raise
 
 
-def log_setup_failure(config_path: Path) -> None:
+def log_setup_failure() -> None:
     """Keep why setup stopped: Tag.app shows only its last words, and only until it closes.
 
     ``state/setup.log`` is listed by tag logs and moves with an abandoned Tag.
@@ -2144,13 +2144,15 @@ def log_setup_failure(config_path: Path) -> None:
     import traceback
     from datetime import datetime, timezone
     try:
-        state = config_path.parent.parent / "state"
+        state = instance_home() / "state"
         state.mkdir(parents=True, exist_ok=True, mode=0o700)
         descriptor = os.open(state / "setup.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(descriptor, "a", encoding="utf-8") as log:
+            if hasattr(os, "fchmod"):
+                os.fchmod(descriptor, 0o600)  # A log made earlier keeps its mode otherwise.
             log.write(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} Setup stopped\n")
             log.write(traceback.format_exc())
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 
