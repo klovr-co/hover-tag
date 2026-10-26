@@ -63,8 +63,7 @@ export interface Bridge {
   setup(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
   /** `tag ARGS --json` for a command that reports progress as it goes, such as start. */
   follow(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
-  /** `skipMemoryModel` skips the built-in search-model download for people who will use their own. */
-  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void, options?: { skipMemoryModel?: boolean }): Promise<Session>;
+  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void): Promise<Session>;
   copy(text: string): Promise<void>;
   paste(): Promise<string>;
   open(target: string): Promise<void>;
@@ -135,8 +134,8 @@ async function tauriBridge(): Promise<Bridge> {
     setup: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
     // The same streamed `tag ARGS --json` session as setup; start never reads input.
     follow: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
-    install: (channel, onLine, onExit, options) =>
-      stream("install_start", { channel, skipMemoryModel: !!options?.skipMemoryModel }, onLine, (code) => onExit(code)),
+    install: (channel, onLine, onExit) =>
+      stream("install_start", { channel }, onLine, (code) => onExit(code)),
     copy: (text) => clipboard.writeText(text),
     paste: async () => (await clipboard.readText()) ?? "",
     open: (target) => (/^[a-z]+:/i.test(target) ? opener.openUrl(target) : opener.openPath(target)),
@@ -244,14 +243,6 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   const updateDemo = new URLSearchParams(location.search).get("update");
   const targetVersion = updateDemo ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
-  let memoryRunning = true;
-  let embedding = "onnx";
-  // ?download=1 shows the built-in model downloading in the background; ?download=failed shows it stopped.
-  const downloadDemo = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("download");
-  let downloadState: "downloading" | "failed" | "ready" | null = downloadDemo === "failed" ? "failed" : downloadDemo ? "downloading" : null;
-  let downloaded = 0.18;
-  let embeddingModel = "";
-  let embeddingUrl = "";
   // ?api=1 starts with one Tag already using its own API.
   const apiDemo: ApiConnection[] = typeof location !== "undefined" && new URLSearchParams(location.search).get("api") ? [{
     tag: rows[0].id, tag_name: rows[0].slack_name ?? "Tag", backend: "codex", kind: "openai", kind_name: "OpenAI-compatible",
@@ -368,29 +359,6 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           return json({ schema_version: 1, ok: true, permissions: next, restart_required: running && !restart, restarted: restart });
         }
       }
-      if (first === "memory") {
-        if (second === "start" || second === "stop") memoryRunning = second === "start";
-        if (second === "embedding") {
-          embedding = args[2] === "local" ? "onnx" : "custom";
-          if (embedding === "custom") { embeddingModel = args[args.indexOf("--embedding-model") + 1]; embeddingUrl = args[args.indexOf("--base-url") + 1]; }
-        }
-        if (second === "download") { downloadState = "downloading"; downloaded = 0.02; }
-        if (downloadState === "downloading" && second === "status") {
-          downloaded = Math.min(1, downloaded + 0.12);
-          if (downloaded >= 1) downloadState = "ready";
-        }
-        const bytes = 560 * 1048576;
-        const download = downloadState && embedding === "onnx" ? {
-          state: downloadState, model: "gpahal/bge-m3-onnx-int8", done: Math.round(bytes * downloaded), total: bytes,
-          percent: downloadState === "ready" ? 100 : Math.floor(downloaded * 100), error: downloadState === "failed" ? "no network" : "",
-          message: downloadState === "failed" ? "The search model download failed: no network. Search is off; run tag memory download to retry." : "" } : null;
-        return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
-          keep_running: keepRunning, embedding: { provider: embedding === "onnx" ? "onnx" : "openai", model: embeddingModel, local: embedding === "onnx", current: embedding, download,
-            choices: [
-              { id: "onnx", label: "Default", detail: "On this computer. Private, offline, 560 MB.", custom: false, model: "", base_url: "", key_saved: false },
-              { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint.",
-                custom: true, model: embeddingModel, base_url: embeddingUrl, key_saved: false }] } });
-      }
       if (first === "autostart") {
         if (second === "on" || second === "off") keepRunning = second === "on";
         return json({ schema_version: 1, enabled: keepRunning, mechanism: "launchd",
@@ -433,7 +401,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         return json({ schema_version: 1, tag: row.id, services: {
           slack: ["Open Tag is live as @" + (row.slack_name ?? "Tag"),
             ...(row === rows[0] ? [`ERROR Routine r-3f9a1c2e7b failed [${DEMO_ROUTINE_REFERENCE}]: rate_limit: usage limit reached`] : [])],
-          mfs: ["Memory server ready"] }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
+        }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
       }
       if (first === "import" || (row && second === "export")) {
         const answer = demoTransfer(args, rows);

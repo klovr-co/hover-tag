@@ -367,7 +367,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
           openRoutine={canRoutines ? (id) => { setRoutineFocus(id); setTab("routines"); } : undefined} />}
         {tab === "channels" && (
           <>
-            <p className="lead" style={{ margin: "0 0 8px" }}>{title(row)} answers and remembers conversations in these channels.</p>
+            <p className="lead" style={{ margin: "0 0 8px" }}>{title(row)} answers in these channels.</p>
             {channels.length ? (
               <div className="card">
                 {channels.map((c) => (
