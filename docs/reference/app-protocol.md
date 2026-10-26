@@ -30,7 +30,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
-| `start-progress` | `tag NAME start --json`: one `{"type": "progress", "step", "label", "state", "text"}` line per readiness step as it happens (`state` is `running`, `done`, `attention`, or `info`; a `running` step is followed by its outcome; `info` on `channel-memory` means channels are still importing in the background and the Tag starts without waiting), then `{"type": "result", "status": "complete"\|"failed", "error"?}` |
+| `start-progress` | `tag NAME start --json`: one `{"type": "progress", "step", "label", "state", "text"}` line per readiness step as it happens (`state` is `running`, `done`, `attention`, or `info`; a `running` step is followed by its outcome; `info` on `channel-memory`, from older Tags only, means channels are still importing in the background and the Tag starts without waiting), then `{"type": "result", "status": "complete"\|"failed", "error"?}` |
 | `autostart` | `tag autostart [status\|on\|off] --json`, `keep_running` in `tag list` |
 | `autostart-keep` | `tag autostart keep TAG... --json`: keep Tags running without starting them now |
 | `logs-json` | `tag NAME logs --json [--limit N]` |
@@ -68,7 +68,7 @@ levels or Tag hasn't seen its account's catalog yet. These fields come from
 saved settings and the last model catalog Tag loaded, so `tag list` never
 starts an agent.
 
-`channels` lists the Slack channels the Tag answers and remembers in, each as
+`channels` lists the Slack channels the Tag answers in, each as
 `{"id": "C…", "name": "launch"}`, sorted by name. It includes channels the Tag
 joined by invitation once Tag has picked them up. `name` comes from the Tag's
 saved channel sources and is `null` when Tag hasn't recorded one; apps then show
@@ -231,8 +231,9 @@ Thinking step's result is the model's thinking summary unless `OPENTAG_SHOW_THIN
 Start or stop one Tag with `tag NAME start` or `tag NAME stop`; the exit code
 is the result. With `start-progress`, `tag NAME start --json` prints one
 `progress` line per readiness row, each with a `label` to show. `step` comes
-from the row, such as `runtime`, `slack-app`, `memory`, `channel-memory`,
-`checks`, and `slack`; other rows, such as the welcome DM, can appear, so treat
+from the row, such as `runtime`, `memory` (the Tag's own memory and its
+history), `slack-app`, `channels` (which channels the Tag was invited to),
+`checks`, and `slack`. Older Tags also report `channel-memory`; other rows, such as the welcome DM, can appear, so treat
 an unknown step as part of the latest known one. The final `result` line
 has `status` and, when it failed, `error`. See
 `protocol/examples/start-progress.jsonl`. Two different Tags can start at the
@@ -583,10 +584,11 @@ checksum and provenance.
 With `TAG_INSTALL_PROGRESS=jsonl`, the installer writes lines beginning
 `@tag-progress ` followed by a JSON object to stderr, alongside its normal
 output. `step` is, in order: `tools`, `python`, `download`, `release` (with
-`version`), `components`, `memory`, `command`, and finally `done` (with
+`version`), `components`, `command`, and finally `done` (with
 `version` and `command`, the installed `tag` path) or `failed` (with
 `message`). Steps that aren't needed, such as `tools` when they are already
-present, are skipped. A client should use `command` from `done` to run Tag
+present, are skipped. Older installers also send `memory` after `components`;
+treat it as part of `components`. A client should use `command` from `done` to run Tag
 afterwards rather than relying on `PATH`.
 
 ## Upgrading
