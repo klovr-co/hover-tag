@@ -42,6 +42,22 @@ Learn more about configuring and authenticating MCP connections in the
 [Codex MCP guide](https://developers.openai.com/codex/mcp) and the
 [Claude Code MCP guide](https://docs.anthropic.com/en/docs/claude-code/mcp).
 
+## Use your signed-in Chrome
+
+Claude Tags can use Claude in Chrome, which acts in the Chrome on the computer
+running Tag, with its sign-ins. It is off by default. To turn it on:
+
+```sh
+tag NAME config set OPENTAG_CLAUDE_CHROME 1
+tag restart
+```
+
+Keep Chrome open with the Claude in Chrome extension signed in while the Tag
+works. Browser actions ask for approval in Slack unless the Tag's permissions
+allow them. Anyone who may ask the Tag can then ask it to act on sites where
+that browser is signed in. Codex Tags use a browser MCP server added to
+`.codex/config.toml` instead.
+
 ## Make commands and logins available
 
 Follow the skill's setup instructions for any required tools. Make sure any

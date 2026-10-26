@@ -454,6 +454,19 @@ class ClaudeAgentRunTests(unittest.TestCase):
             self.run_agent(script)
         self.assertFalse(hasattr(FakeClient.instances[1].options, "extra_args"))
 
+    def test_connects_claude_in_chrome_only_when_the_tag_turns_it_on(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        self.run_agent(script)
+        self.assertNotIn("chrome", FakeClient.instances[0].options.extra_args)
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_CHROME": "1"}):
+            self.run_agent(script)
+        self.assertEqual({"thinking-display": "summarized", "chrome": None}, FakeClient.instances[1].options.extra_args)
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_CHROME": "1", "OPENTAG_SHOW_THINKING": "0"}):
+            self.run_agent(script)
+        self.assertEqual({"chrome": None}, FakeClient.instances[2].options.extra_args)
+
     def test_claude_auto_memory_is_disabled_for_tag_runs(self) -> None:
         async def script(_client):
             yield ResultMessage(result="ok")

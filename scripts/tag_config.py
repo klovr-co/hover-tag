@@ -29,7 +29,7 @@ DEFAULTS = {
     "OPENTAG_TRANSPORT": "slack", "OPENTAG_TIMEOUT_SECONDS": "420",
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
-    "OPENTAG_SLACK_DM_ENABLED": "1", "OPENTAG_SHOW_THINKING": "1",
+    "OPENTAG_SLACK_DM_ENABLED": "1", "OPENTAG_SHOW_THINKING": "1", "OPENTAG_CLAUDE_CHROME": "0",
     "OPENTAG_FILE_DELIVERY": "local+slack",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "150000", "OPENTAG_THREAD_IDLE_HOURS": "4",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
@@ -82,6 +82,7 @@ LABELS = {
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
     "OPENTAG_SHOW_THINKING": "Show thinking summaries in Agent activity (1 on, 0 off)",
+    "OPENTAG_CLAUDE_CHROME": "Claude in Chrome: Claude may use this computer's signed-in Chrome (1 on, 0 off)",
     "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
     "OPENTAG_PEER_TAGS": "Other Tags this Tag may ask (Name=MEMBERID, comma-separated)",
@@ -221,7 +222,8 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a slack:// connector URI"
     if key == "MFS_SLACK_CONNECTOR_CONFIG" and value and not Path(value).is_absolute():
         return "Use an absolute connector configuration path"
-    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING"} and value not in {"0", "1"}:
+    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING",
+               "OPENTAG_CLAUDE_CHROME"} and value not in {"0", "1"}:
         return "Use 0 or 1"
     if key == "SLACK_CHANNEL_POLICY" and value not in {"selected", "invited"}:
         return "Choose selected or invited"
