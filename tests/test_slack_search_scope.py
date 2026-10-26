@@ -6,8 +6,6 @@ from unittest.mock import patch
 
 from scripts.slack_search_scope import (
     explicit_channel_names,
-    indexed_slack_channels,
-    mfs_scope_is_indexed,
     parse_search_intent,
     plan_search_scopes,
 )
@@ -68,17 +66,6 @@ class FakeSlackClient:
         return {"members": values, "response_metadata": {"next_cursor": ""}}
 
 
-SCOPES = ",".join(
-    (
-        "slack://tag-t1/channels/old-general__C1",
-        "slack://tag-t1/channels/support__C2",
-        "slack://tag-t1/channels/leadership__G3",
-        "slack://tag-t2/channels/foreign__C9",
-        "file://local/repo",
-    )
-)
-
-
 class SearchIntentTests(unittest.TestCase):
     def test_explicit_names_support_slack_markup_without_treating_ids_as_names(self) -> None:
         self.assertEqual(
@@ -132,62 +119,6 @@ class SearchIntentTests(unittest.TestCase):
         )
 
 
-class IndexedScopeTests(unittest.TestCase):
-    def test_app_scoped_connectors_preserve_exact_workspace_boundary(self) -> None:
-        for authority in ("tag-t1-a123", "TAG-T1-A123", "tag-t1"):
-            with self.subTest(authority=authority):
-                scope = f"slack://{authority}/channels/general__C1"
-                self.assertEqual(scope, indexed_slack_channels(scope, "T1")["C1"].scope)
-        for authority in (
-            "tag-t2-a123", "tag-t10-a123", "tag-t1-other", "tag-t1-a",
-            "tag-t1-a123-extra", "tag-t1-a123:80", "user@tag-t1-a123",
-        ):
-            with self.subTest(authority=authority):
-                self.assertEqual({}, indexed_slack_channels(
-                    f"slack://{authority}/channels/general__C1", "T1"
-                ))
-
-    def test_indexes_only_exact_workspace_channel_scopes(self) -> None:
-        indexed = indexed_slack_channels(SCOPES, "T1")
-        self.assertEqual({"C1", "C2", "G3"}, set(indexed))
-        self.assertEqual("slack://tag-t1/channels/old-general__C1", indexed["C1"].scope)
-
-    def test_live_mfs_check_requires_a_listable_scope(self) -> None:
-        with patch(
-            "scripts.slack_search_scope.mfs_request_json",
-            side_effect=(
-                {
-                    "entries": [
-                        {"path": "slack://tag-t1/channels/renamed-support__C2"}
-                    ]
-                },
-                {
-                    "entries": [
-                        {"name": "messages.jsonl", "search_status": "indexed"}
-                    ]
-                },
-            ),
-        ) as request:
-            self.assertTrue(mfs_scope_is_indexed("slack://tag-t1/channels/support__C2"))
-        self.assertEqual(
-            [
-                unittest.mock.call(
-                    "/v1/ls", {"path": "slack://tag-t1/channels"}
-                ),
-                unittest.mock.call(
-                    "/v1/ls",
-                    {"path": "slack://tag-t1/channels/renamed-support__C2"},
-                ),
-            ],
-            request.call_args_list,
-        )
-        with patch(
-            "scripts.slack_search_scope.mfs_request_json",
-            side_effect=OSError("MFS unavailable"),
-        ):
-            self.assertFalse(mfs_scope_is_indexed("slack://tag-t1/channels/support__C2"))
-
-
 class ScopePlanningTests(unittest.TestCase):
     def plan(self, request: str, client: FakeSlackClient | None = None, **kwargs):
         return plan_search_scopes(
@@ -195,33 +126,30 @@ class ScopePlanningTests(unittest.TestCase):
             current_channel_id=kwargs.pop("current_channel_id", "C1"),
             caller_id=kwargs.pop("caller_id", "U1"),
             team_id=kwargs.pop("team_id", "T1"),
-            configured_channels=kwargs.pop("configured_channels", "C1,C2,G3,C4"),
-            allowed_scopes=kwargs.pop("allowed_scopes", SCOPES),
+            configured_channels=kwargs.pop("configured_channels", "C1,C2,G3"),
             client=client or FakeSlackClient(),
-            scope_is_indexed=kwargs.pop("scope_is_indexed", lambda _scope: True),
             **kwargs,
         )
 
-    def test_setup_app_scopes_produce_search_grant_with_visibility_checks(self) -> None:
-        from scripts.opentag_setup import connector_scope
-        from scripts.slack_channels import SlackChannel
-
-        scope = connector_scope("T1", SlackChannel("C1", "general", False, True), "A123")
-        plan = self.plan("search all channels", allowed_scopes=scope)
+    def test_all_search_grants_the_callers_visible_channels_and_public_search(self) -> None:
+        plan = self.plan("search all channels")
         self.assertEqual("all", plan.mode)
-        self.assertEqual((scope,), plan.scopes)
-        self.assertEqual({"C1": "general"}, plan.channel_labels)
+        self.assertEqual(("C1", "C2", "G3"), plan.channel_ids)
+        self.assertEqual({"C1": "general", "C2": "support", "G3": "leadership"}, plan.channel_labels)
+        self.assertTrue(plan.public_search)
+        self.assertEqual({"id": "G3", "name": "leadership", "private": True}, plan.as_dict()["channels"][2])
 
+    def test_guests_get_only_channels_they_are_in_and_no_public_search(self) -> None:
         client = FakeSlackClient(restricted=True)
         client.members["C1"] = []
-        denied = self.plan("search all channels", client, allowed_scopes=scope)
-        self.assertEqual("denied", denied.mode)
-        self.assertEqual((), denied.scopes)
+        plan = self.plan("search all channels", client)
+        self.assertEqual(("C2", "G3"), plan.channel_ids)
+        self.assertFalse(plan.public_search)
 
-    def test_default_is_byte_for_byte_current_scope_without_slack_calls(self) -> None:
+    def test_default_is_the_current_conversation_without_slack_calls(self) -> None:
         client = FakeSlackClient()
         plan = self.plan("What happened?", client)
-        self.assertEqual(("slack://tag-t1/channels/old-general__C1",), plan.scopes)
+        self.assertEqual(("current", ()), (plan.mode, plan.channels))
         self.assertEqual([], client.info_calls)
 
     def test_named_search_uses_stable_id_and_refreshed_name(self) -> None:
@@ -229,58 +157,29 @@ class ScopePlanningTests(unittest.TestCase):
         client.channels["C1"]["name"] = "company-news"
         plan = self.plan("search #company-news and #support", client)
         self.assertEqual("named", plan.mode)
-        self.assertEqual(("C1", "C2"), tuple(channel.channel_id for channel in plan.channels))
+        self.assertEqual(("C1", "C2"), plan.channel_ids)
         self.assertEqual("company-news", plan.channel_labels["C1"])
-        self.assertIn("old-general__C1", plan.scopes[0])
 
-    def test_rename_refreshes_mfs_path_by_stable_id(self) -> None:
-        client = FakeSlackClient()
-        client.channels["C1"]["name"] = "company-news"
-        plan = self.plan(
-            "search #company-news",
-            client,
-            resolve_indexed_scope=lambda channel: (
-                "slack://tag-t1/channels/company-news__C1"
-                if channel.channel_id == "C1"
-                else channel.scope
-            ),
-        )
-        self.assertEqual(
-            ("slack://tag-t1/channels/company-news__C1",), plan.scopes
-        )
-
-    def test_all_search_intersects_configured_indexed_and_visible(self) -> None:
+    def test_all_search_leaves_out_what_it_cannot_verify(self) -> None:
         client = FakeSlackClient()
         client.members["G3"] = []
-        plan = self.plan("check all channels I can access", client)
-        self.assertEqual(("C1", "C2"), tuple(channel.channel_id for channel in plan.channels))
-        self.assertNotIn("C4", client.info_calls)  # configured, but not indexed
-        self.assertNotIn("C9", client.info_calls)  # indexed, but another workspace
-        self.assertIn("Some channels were omitted", plan.notice)
-
-    def test_stale_or_unreachable_mfs_scope_fails_closed_before_slack_lookup(self) -> None:
-        client = FakeSlackClient()
-        plan = self.plan(
-            "search #support",
-            client,
-            scope_is_indexed=lambda scope: not scope.endswith("__C2"),
-        )
-        self.assertEqual("clarify", plan.mode)
-        self.assertNotIn("C2", client.info_calls)
+        plan = self.plan("check all channels I can access", client, configured_channels="C1,C2,G3,C4")
+        self.assertEqual(("C1", "C2"), plan.channel_ids)
+        self.assertIn("left out", plan.notice)
 
     def test_private_channel_requires_membership(self) -> None:
         client = FakeSlackClient()
         client.members["G3"] = []
         plan = self.plan("search #leadership", client)
         self.assertEqual("clarify", plan.mode)
-        self.assertEqual((), plan.scopes)
+        self.assertEqual((), plan.channels)
 
     def test_restricted_user_requires_membership_even_for_public_channel(self) -> None:
         client = FakeSlackClient(restricted=True)
         client.members["C2"] = []
         plan = self.plan("search #support", client)
         self.assertEqual("clarify", plan.mode)
-        self.assertEqual((), plan.scopes)
+        self.assertEqual((), plan.channels)
 
     def test_membership_pagination_is_followed(self) -> None:
         client = FakeSlackClient()
@@ -313,18 +212,16 @@ class ScopePlanningTests(unittest.TestCase):
         self.assertIn("#support", plan.clarification)
         self.assertNotIn("leadership", plan.clarification)
 
-    def test_org_member_can_search_only_the_selected_workspace_in_shared_memory(self):
+    def test_org_member_can_search_only_the_selected_workspace(self):
         client = FakeSlackClient()
         client.user["team_id"] = "T2"
         client.user["enterprise_user"] = {"enterprise_id": "EORG", "teams": ["T1", "T2"]}
         with patch.dict(os.environ, {"SLACK_ENTERPRISE_ID": "EORG"}):
-            plan = self.plan("search all channels", client)
-            self.assertTrue(plan.scopes)
-            self.assertTrue(all(scope.startswith("slack://tag-t1/") for scope in plan.scopes))
+            self.assertEqual(("C1", "C2", "G3"), self.plan("search all channels", client).channel_ids)
             client.user["enterprise_user"]["teams"] = ["T2"]
-            self.assertEqual(self.plan("search all channels", client).scopes, ())
+            self.assertEqual("denied", self.plan("search all channels", client).mode)
             client.user["enterprise_user"] = {"enterprise_id": "EOTHER", "teams": ["T1"]}
-            self.assertEqual(self.plan("search all channels", client).scopes, ())
+            self.assertEqual("denied", self.plan("search all channels", client).mode)
 
     def test_caller_and_workspace_identity_must_match(self) -> None:
         client = FakeSlackClient()

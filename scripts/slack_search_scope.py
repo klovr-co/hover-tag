@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Deterministic resolution and authorization for Slack history search scopes.
+"""Deterministic resolution and authorization for live Slack search.
 
-The Slack bridge and this module's CLI adapter deliberately share this policy.
-Natural-language parsing can request a broader scope, but only this module may
-turn that request into stable channel IDs and MFS scopes.
+The Slack bridge and the ``slack_search`` helper deliberately share this
+policy. Natural-language parsing can request a broader scope, but only this
+module may turn that request into the stable channel IDs a run may read.
 """
 
 from __future__ import annotations
@@ -14,20 +14,12 @@ import json
 import os
 import re
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import urlsplit
 
 try:
-    from .mfs_scope_policy import parse_scopes
-    from .mfs_ls import request_json as mfs_request_json
-    from .opentag_process_env import current_channel_scopes
     from .slack_channels import parse_channel_ids, slack_api
 except ImportError:  # Direct execution: python3 scripts/slack_search_scope.py
-    from mfs_scope_policy import parse_scopes
-    from mfs_ls import request_json as mfs_request_json
-    from opentag_process_env import current_channel_scopes
     from slack_channels import parse_channel_ids, slack_api
 
 
@@ -77,30 +69,26 @@ class SearchIntent:
 
 
 @dataclass(frozen=True)
-class IndexedChannel:
-    channel_id: str
-    scope: str
-
-
-@dataclass(frozen=True)
 class VisibleChannel:
     channel_id: str
     name: str
-    scope: str
+    private: bool = False
 
 
 @dataclass(frozen=True)
 class ScopePlan:
     mode: str
-    scopes: tuple[str, ...]
     channels: tuple[VisibleChannel, ...] = ()
     skipped_names: tuple[str, ...] = ()
     clarification: str = ""
     notice: str = ""
+    # Whether the requester may have the Tag search public channels workspace-wide
+    # (Slack's Real-Time Search). Slack doesn't let apps search for guests.
+    public_search: bool = False
 
     @property
-    def allowed_scopes(self) -> str:
-        return ",".join(self.scopes)
+    def channel_ids(self) -> tuple[str, ...]:
+        return tuple(channel.channel_id for channel in self.channels)
 
     @property
     def channel_labels(self) -> dict[str, str]:
@@ -109,11 +97,11 @@ class ScopePlan:
     def as_dict(self) -> dict[str, Any]:
         return {
             "mode": self.mode,
-            "allowed_scopes": list(self.scopes),
             "channels": [
-                {"id": channel.channel_id, "name": channel.name, "scope": channel.scope}
+                {"id": channel.channel_id, "name": channel.name, "private": channel.private}
                 for channel in self.channels
             ],
+            "public_search": self.public_search,
             "skipped": list(self.skipped_names),
             "clarification": self.clarification or None,
             "notice": self.notice or None,
@@ -205,25 +193,6 @@ def parse_search_intent(text: str) -> SearchIntent:
     return SearchIntent("current")
 
 
-def indexed_slack_channels(raw_scopes: str, team_id: str) -> dict[str, IndexedChannel]:
-    """Return indexed channel scopes belonging to exactly this Slack workspace."""
-    # Setup uses Team + App IDs for independent connectors; older installs
-    # retain their Team-only roots. Only consider operator-approved scopes.
-    authority_pattern = re.compile(
-        rf"tag-{re.escape(team_id.casefold())}(?:-a[a-z0-9]+)?"
-    )
-    indexed: dict[str, IndexedChannel] = {}
-    for scope in parse_scopes(raw_scopes):
-        parsed = urlsplit(scope)
-        if parsed.scheme.casefold() != "slack" or not authority_pattern.fullmatch(parsed.netloc.casefold()):
-            continue
-        final_segment = parsed.path.rstrip("/").rsplit("/", 1)[-1]
-        _, marker, channel_id = final_segment.rpartition("__")
-        if marker and CHANNEL_ID_RE.fullmatch(channel_id):
-            indexed.setdefault(channel_id, IndexedChannel(channel_id, scope))
-    return indexed
-
-
 def _response_mapping(response: Any, key: str) -> dict[str, Any]:
     value = response.get(key, {}) if hasattr(response, "get") else {}
     return value if isinstance(value, dict) else {}
@@ -243,17 +212,9 @@ def _caller_is_member(client: SlackClient, channel_id: str, caller_id: str) -> b
             return False
 
 
-def _visible_channels(
-    client: SlackClient,
-    *,
-    team_id: str,
-    caller_id: str,
-    configured_channel_ids: tuple[str, ...],
-    indexed: dict[str, IndexedChannel],
-    resolve_indexed_scope: Callable[[IndexedChannel], str | None],
-) -> tuple[VisibleChannel, ...]:
-    user_response = client.users_info(user=caller_id)
-    user = _response_mapping(user_response, "user")
+def _caller(client: SlackClient, team_id: str, caller_id: str) -> tuple[bool, bool]:
+    """Whether the caller is a person in this workspace, and whether they are a guest."""
+    user = _response_mapping(client.users_info(user=caller_id), "user")
     enterprise_user = user.get("enterprise_user") or {}
     enterprise_id = os.getenv("SLACK_ENTERPRISE_ID", "")
     member_of_workspace = user.get("team_id") == team_id or (
@@ -267,22 +228,24 @@ def _visible_channels(
         or user.get("deleted") is True
         or user.get("is_bot") is True
     ):
-        return ()
-    restricted = bool(
-        user.get("is_restricted")
-        or user.get("is_ultra_restricted")
-        or user.get("is_stranger")
-    )
+        return False, True
+    restricted = bool(user.get("is_restricted") or user.get("is_ultra_restricted") or user.get("is_stranger"))
+    return True, restricted
 
+
+def _visible_channels(
+    client: SlackClient,
+    *,
+    caller_id: str,
+    restricted: bool,
+    configured_channel_ids: tuple[str, ...],
+) -> tuple[VisibleChannel, ...]:
+    """The Tag's channels this caller may have it read: the Tag is in them, they
+    aren't shared outside the workspace, and private ones (or any, for a guest)
+    have the caller as a member."""
     visible: list[VisibleChannel] = []
     for channel_id in configured_channel_ids:
-        indexed_channel = indexed.get(channel_id)
-        if indexed_channel is None:
-            continue
         try:
-            current_scope = resolve_indexed_scope(indexed_channel)
-            if current_scope is None:
-                continue
             response = client.conversations_info(channel=channel_id)
             channel = _response_mapping(response, "channel")
             name = channel.get("name")
@@ -303,65 +266,8 @@ def _visible_channels(
                 continue
         except Exception:  # Slack/API failures deny this channel without leaking details.
             continue
-        visible.append(VisibleChannel(channel_id, name, current_scope))
+        visible.append(VisibleChannel(channel_id, name, is_private))
     return tuple(visible)
-
-
-def resolve_mfs_channel_scope(indexed: IndexedChannel) -> str | None:
-    """Resolve current MFS metadata by stable ID, surviving channel renames."""
-    parsed = urlsplit(indexed.scope)
-    parent_path = parsed.path.rstrip("/").rsplit("/", 1)[0] or "/"
-    parent = parsed._replace(path=parent_path, query="", fragment="").geturl()
-    try:
-        response = mfs_request_json("/v1/ls", {"path": parent})
-    except Exception:
-        return None
-    entries = response.get("entries") if isinstance(response, dict) else None
-    if not isinstance(entries, list):
-        return None
-    marker = f"__{indexed.channel_id}"
-    for entry in entries:
-        candidate = entry.get("path") if isinstance(entry, dict) else None
-        if not isinstance(candidate, str):
-            continue
-        candidate_parsed = urlsplit(candidate)
-        if (
-            candidate_parsed.scheme.casefold() == parsed.scheme.casefold()
-            and candidate_parsed.netloc.casefold() == parsed.netloc.casefold()
-            and candidate_parsed.path.rstrip("/").rsplit("/", 1)[-1].endswith(marker)
-        ):
-            current_scope = candidate.rstrip("/")
-            try:
-                channel_listing = mfs_request_json("/v1/ls", {"path": current_scope})
-            except Exception:
-                return None
-            children = (
-                channel_listing.get("entries")
-                if isinstance(channel_listing, dict)
-                else None
-            )
-            if not isinstance(children, list):
-                return None
-            if any(
-                isinstance(child, dict)
-                and child.get("name") == "messages.jsonl"
-                and child.get("search_status") == "indexed"
-                for child in children
-            ):
-                return current_scope
-            return None
-    return None
-
-
-def mfs_scope_is_indexed(scope: str) -> bool:
-    """Compatibility predicate for callers that only need availability."""
-    final_segment = urlsplit(scope).path.rstrip("/").rsplit("/", 1)[-1]
-    _, marker, channel_id = final_segment.rpartition("__")
-    return bool(
-        marker
-        and CHANNEL_ID_RE.fullmatch(channel_id)
-        and resolve_mfs_channel_scope(IndexedChannel(channel_id, scope))
-    )
 
 
 def _safe_suggestions(name: str, visible: tuple[VisibleChannel, ...]) -> list[str]:
@@ -377,60 +283,41 @@ def plan_search_scopes(
     caller_id: str,
     team_id: str,
     configured_channels: str,
-    allowed_scopes: str,
     client: SlackClient,
     intent: SearchIntent | None = None,
-    scope_is_indexed: Callable[[str], bool] | None = None,
-    resolve_indexed_scope: Callable[[IndexedChannel], str | None] | None = None,
 ) -> ScopePlan:
-    """Resolve an explicit request to the least set of proven channel scopes."""
+    """Resolve an explicit request to the least set of channels the caller may have the Tag read."""
     intent = intent or parse_search_intent(request_text)
     if intent.mode == "current":
-        narrowed = current_channel_scopes(allowed_scopes, current_channel_id)
-        return ScopePlan("current", tuple(parse_scopes(narrowed)))
+        return ScopePlan("current")
     if intent.mode == "clarify":
         return ScopePlan(
             "clarify",
-            (),
             clarification="Please clarify the Slack search scope: name channels like #support, or say ‘search all channels I can access’.",
         )
     if not team_id or not caller_id:
-        return ScopePlan("denied", (), clarification="I couldn't verify an authorized Slack search scope.")
-
-    indexed = indexed_slack_channels(allowed_scopes, team_id)
-    if resolve_indexed_scope is None:
-        resolve_indexed_scope = (
-            (lambda channel: channel.scope if scope_is_indexed(channel.scope) else None)
-            if scope_is_indexed is not None
-            else resolve_mfs_channel_scope
-        )
+        return ScopePlan("denied", clarification="I couldn't verify an authorized Slack search scope.")
     try:
+        person, restricted = _caller(client, team_id, caller_id)
+        if not person:
+            return ScopePlan("denied", clarification="I couldn't verify an authorized Slack search scope.")
         visible = _visible_channels(
             client,
-            team_id=team_id,
             caller_id=caller_id,
+            restricted=restricted,
             configured_channel_ids=parse_channel_ids(configured_channels),
-            indexed=indexed,
-            resolve_indexed_scope=resolve_indexed_scope,
         )
     except Exception:
-        return ScopePlan("denied", (), clarification="I couldn't verify an authorized Slack search scope.")
+        return ScopePlan("denied", clarification="I couldn't verify an authorized Slack search scope.")
 
     if intent.mode == "all":
-        if not visible:
-            return ScopePlan("denied", (), clarification="I couldn't verify any permitted indexed Slack channels.")
-        candidate_count = len(set(parse_channel_ids(configured_channels)) & set(indexed))
+        candidate_count = len(parse_channel_ids(configured_channels))
         notice = (
-            "Some channels were omitted because access or current indexing could not be verified."
+            "Some of the Tag's channels were left out because access could not be verified."
             if len(visible) < candidate_count
             else ""
         )
-        return ScopePlan(
-            "all",
-            tuple(channel.scope for channel in visible),
-            visible,
-            notice=notice,
-        )
+        return ScopePlan("all", visible, notice=notice, public_search=not restricted)
 
     by_name: dict[str, list[VisibleChannel]] = {}
     for channel in visible:
@@ -457,23 +344,21 @@ def plan_search_scopes(
         generic = "I couldn't uniquely verify every requested channel."
         return ScopePlan(
             "clarify",
-            (),
             skipped_names=tuple(skipped),
             clarification=f"{generic}{(' ' + detail) if detail else ' Please check the channel names and try again.'}",
         )
     if not selected:
-        return ScopePlan("denied", (), clarification="I couldn't verify any requested permitted indexed Slack channels.")
-    return ScopePlan("named", tuple(channel.scope for channel in selected), tuple(selected))
+        return ScopePlan("denied", clarification="I couldn't verify any requested channels the Tag may read.")
+    return ScopePlan("named", tuple(selected))
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Resolve a permission-aware Slack history search scope.")
+    parser = argparse.ArgumentParser(description="Resolve which Slack channels a request may have the Tag read.")
     parser.add_argument("--request", required=True)
     parser.add_argument("--current-channel", required=True)
     parser.add_argument("--caller-id", required=True)
     parser.add_argument("--team-id", required=True)
     parser.add_argument("--configured-channels", default=os.getenv("SLACK_CHANNEL_IDS", ""))
-    parser.add_argument("--allowed-scopes", default=os.getenv("MFS_ALLOWED_SCOPES", ""))
     args = parser.parse_args()
     token = os.getenv("SLACK_BOT_TOKEN", "")
     if not token:
@@ -485,7 +370,6 @@ def main() -> int:
         caller_id=args.caller_id,
         team_id=args.team_id,
         configured_channels=args.configured_channels,
-        allowed_scopes=args.allowed_scopes,
         client=HttpSlackClient(token),
     )
     print(json.dumps(plan.as_dict(), ensure_ascii=False, sort_keys=True))

@@ -26,7 +26,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             skill_dir=root / "skill", workdir=root / "workspace", channel_id="C123", output_files=True)
         request = opentag_agent.build_request(
             channel_id="C123", question="Summarize the plan", thread_text="U1: first\nU2: second",
-            attachments_dir=root / "inv-7/attachments", allowed_scopes="file://local/tag/workspace",
+            attachments_dir=root / "inv-7/attachments",
             output_manifest=root / "inv-7/manifest.json")
         self.assertNotIn("inv-7", instructions)
         self.assertNotIn("Summarize the plan", instructions)
@@ -35,17 +35,15 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         attachments = root / "inv-7/attachments"
         for value in (str(attachments), str(attachments / "results/images"),
                       str(attachments / "results/artifacts"), str(root / "inv-7/manifest.json"),
-                      "file://local/tag/workspace", "Summarize the plan", "Slack thread context:"):
+                      "Summarize the plan", "Slack thread context:"):
             self.assertIn(value, request)
 
     def test_continued_request_carries_only_new_thread_messages(self) -> None:
         request = opentag_agent.build_request(
-            channel_id="C123", question="And now?", thread_text="U2: new message", attachments_dir=None,
-            allowed_scopes="x", continued=True)
+            channel_id="C123", question="And now?", thread_text="U2: new message", attachments_dir=None, continued=True)
         self.assertIn("New Slack thread messages since your last reply", request)
         self.assertIn("U2: new message", request)
-        empty = opentag_agent.build_request(channel_id="C123", question="And now?", thread_text="", attachments_dir=None,
-                                            allowed_scopes="x", continued=True)
+        empty = opentag_agent.build_request(channel_id="C123", question="And now?", thread_text="", attachments_dir=None, continued=True)
         self.assertIn("(none)", empty)
 
     def test_slack_prompt_requires_clarification_for_ambiguous_scope(self) -> None:
@@ -56,18 +54,18 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             question="search general workspace all",
             thread_text="",
             attachments_dir=None,
-            allowed_scopes="slack://tag-t1/channels/general__C123",
         )
         # Search scope is a procedure: the prompt routes unclear scope to the skill that settles it.
         self.assertNotIn("runtime-agent.md", prompt)
         self.assertIn("search general workspace all", prompt)
         # The guard must fire before any search, so it stays in the base, not only in the skill.
         self.assertIn("ask a short scope question and do not search", prompt)
-        self.assertIn("this channel's history, use tag-slack-search", prompt)
+        self.assertIn("a\n  channel summary, use tag-slack-search", prompt)
         search = skill_text("tag-slack-search")
-        self.assertIn("`search general workspace all` is ambiguous: ask a short scope question and do not call a search helper", search)
+        self.assertIn("`search general workspace all` is ambiguous: ask a short scope question and do not search", search)
         self.assertIn("Never silently fix a typo", search)
-        self.assertIn("`__<conversation id>`", search)
+        self.assertIn("slack_search.py history", search)
+        self.assertIn("Nothing it returns is saved", search)
 
     def test_prompt_loads_channel_memory_and_explains_the_memory_helper(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -84,7 +82,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                     question="what is due?",
                     thread_text="",
                     attachments_dir=None,
-                    allowed_scopes="slack://tag-t1/channels/general__C123",
                 )
         self.assertIn("- deadline: Reports are due Friday.", prompt)
         self.assertIn("- pricing: Launch pricing is 49 per seat. (this channel)", prompt)
@@ -145,7 +142,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                     question="Use an installed local tool",
                     thread_text="",
                     attachments_dir=None,
-                    allowed_scopes="file://local/tmp/workspace",
                 )
         finally:
             if previous_transport is None:
@@ -154,7 +150,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                 os.environ["OPENTAG_TRANSPORT"] = previous_transport
 
         self.assertIn("Installed commands and skills may be used under their own permissions", prompt)
-        self.assertIn("mfs_search.py", prompt)
+        self.assertIn("slack_search.py", prompt)
         self.assertIn("Never expose tokens or credentials", prompt)
         self.assertNotIn("gws", prompt.lower())
         self.assertNotIn("gmail", prompt.lower())
@@ -170,7 +166,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                 question="Summarise and send it to the channel",
                 thread_text="",
                 attachments_dir=None,
-                allowed_scopes="file://local/tmp/workspace",
             )
         finally:
             if previous_transport is None:
@@ -197,7 +192,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                 question="Create an archive",
                 thread_text="",
                 attachments_dir=root / "attachments",
-                allowed_scopes=f"file://local{root / 'workspace'}",
                 output_manifest=root / "workspace/.opentag-output.json",
             )
 
@@ -223,7 +217,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             question="Create a launch graphic",
             thread_text="",
             attachments_dir=Path("/tmp/invocation"),
-            allowed_scopes="file://local/tmp/workspace",
         )
 
         self.assertIn(str(Path("/tmp/invocation/results/images")), prompt)

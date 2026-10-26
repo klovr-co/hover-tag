@@ -215,7 +215,7 @@ class ClaudeEventMapperTests(unittest.TestCase):
     def test_maps_tools_to_sanitized_activity_labels(self) -> None:
         events = mapped([
             AssistantMessage([
-                {"id": "t1", "name": "Bash", "input": {"command": "python mfs_search.py launch"}},
+                {"id": "t1", "name": "Bash", "input": {"command": "python slack_search.py launch"}},
                 {"id": "t2", "name": "Edit", "input": {"file_path": "/work/notes.md", "old_string": "a"}},
                 {"id": "t3", "name": "Read", "input": {"file_path": "/work/plan.md"}},
                 {"id": "t4", "name": "mcp__github__search_issues", "input": {"q": "bug"}},
@@ -228,7 +228,7 @@ class ClaudeEventMapperTests(unittest.TestCase):
 
         starts = {event["activity_id"]: event["label"] for event in events if event["type"] == "activity_start"}
         self.assertEqual({
-            "t1": "Searching connected knowledge…",
+            "t1": "Searching Slack…",
             "t2": "Updating files…",
             "t3": "Reading files…",
             "t4": "Searching GitHub issues…",
