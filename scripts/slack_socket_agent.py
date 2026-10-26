@@ -2481,6 +2481,15 @@ def resolve_active_approval(key: RunKey, approval_id: str, *, approved: bool = F
     return run.resolve_approval(approval_id, approved=approved, choice=choice) if run is not None else False
 
 
+def slack_action_token(event: dict[str, Any], body: dict[str, Any]) -> str | None:
+    """The ``action_token`` Slack sends with a mention or a direct message, if any."""
+    for source in (event, body.get("event") if isinstance(body.get("event"), dict) else {}, body):
+        token = source.get("action_token") if isinstance(source, dict) else None
+        if isinstance(token, str) and token.strip():
+            return token.strip()
+    return None
+
+
 def slack_search_grant_json(plan: ScopePlan, request_text: str) -> str:
     """Bind a pre-authorized channel grant to the original Slack request."""
     payload = plan.as_dict()
@@ -2508,6 +2517,7 @@ def run_backend(
     handoff_requests: Path | None = None,
     handoff_depth: int = 0,
     thread_ts: str | None = None,
+    action_token: str | None = None,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -2552,7 +2562,6 @@ def run_backend(
             transport="slack",
             conversation_id=channel,
             caller_id=caller_id,
-            authorized_scopes=scope_plan.allowed_scopes if scope_plan else None,
             channel_labels=(
                 json.dumps(slack_search_grant.channel_labels, sort_keys=True)
                 if slack_search_grant
@@ -2567,6 +2576,7 @@ def run_backend(
             handoff_requests=str(handoff_requests) if handoff_requests else None,
             handoff_depth=handoff_depth,
             thread_ts=thread_ts,
+            action_token=action_token,
         )
         result = subprocess.run(
             cmd,
@@ -2632,6 +2642,7 @@ def run_backend_events(
     routine_id: str | None = None,
     on_cancelled: Callable[[], None] | None = None,
     on_stop_requested: Callable[[], None] | None = None,
+    action_token: str | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2701,7 +2712,6 @@ def run_backend_events(
         transport="slack",
         conversation_id=channel,
         caller_id=caller_id,
-        authorized_scopes=scope_plan.allowed_scopes if scope_plan else None,
         channel_labels=(
             json.dumps(slack_search_grant.channel_labels, sort_keys=True)
             if slack_search_grant
@@ -2718,6 +2728,7 @@ def run_backend_events(
         run_limits=run_limits,
         routine_id=routine_id,
         thread_ts=thread_ts,
+        action_token=action_token,
     )
     try:
         process = subprocess.Popen(
@@ -3647,7 +3658,6 @@ def save_home_channels(channel_ids: list[str]) -> None:
 
 def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     bot = suggested_bot_name(backend)
-    scopes = [s.strip() for s in os.getenv("MFS_ALLOWED_SCOPES", "").split(",") if s.strip()]
     channel_ids = os.getenv("SLACK_CHANNEL_IDS", "").strip() or os.getenv("SLACK_CHANNEL_ID", "").strip()
     channel = ", ".join(
         slack_channels.channel_label(require_env("SLACK_BOT_TOKEN"), channel_id)
@@ -3675,9 +3685,7 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     print("=" * 64)
     print(f"Open Tag is live as @{bot}")
     print(f"  Brain   : {backend}  ->  {invoke}")
-    print(f"  Memory  : {len(scopes)} permitted MFS scope(s):")
-    for scope in scopes or ["(none — set MFS_ALLOWED_SCOPES)"]:
-        print(f"            - {scope}")
+    print("  Search  : live Slack search with this Tag's own connection; nothing is stored")
     dm_status = "enabled" if direct_messages_enabled() else "disabled"
     print(f"  Slack   : {slack_status}")
     print(f"  DMs     : {dm_status}")
@@ -4723,6 +4731,8 @@ def create_app(
             return
         team = body.get("team_id") or event.get("team") or ""
         question = strip_mention(event.get("text", ""))
+        # Slack's permission to search public channels for this request (Real-Time Search).
+        action_token = slack_action_token(event, body)
         configured_team = os.getenv("SLACK_TEAM_ID", "").strip()
         policy_team = team if not configured_team or configured_team == team else ""
         configured_channels = os.getenv("SLACK_CHANNEL_IDS", "").strip()
@@ -4734,7 +4744,6 @@ def create_app(
             caller_id=user_id,
             team_id=policy_team,
             configured_channels=configured_channels,
-            allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
             client=client,
             intent=SearchIntent("current"),
         )
@@ -4803,8 +4812,7 @@ def create_app(
                 caller_id=user_id,
                 team_id=policy_team,
                 configured_channels=configured_channels,
-                allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
-                client=client,
+                    client=client,
                 intent=SearchIntent("all"),
             )
         except BaseException:
@@ -5002,6 +5010,7 @@ def create_app(
                         thread_new_text=thread_new_text,
                         on_session=capture_session if app_server_selected else None,
                         on_context=save_session if app_server_selected else None,
+                        action_token=action_token,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -5024,6 +5033,7 @@ def create_app(
                         handoff_requests=handoff_requests,
                         handoff_depth=handoff_depth,
                         thread_ts=thread_ts,
+                        action_token=action_token,
                     )
                 finish_activity(
                     "completed" if succeeded else
@@ -5439,11 +5449,11 @@ def create_app(
                                or os.getenv("SLACK_CHANNEL_ID", "").strip())
         scope_plan = plan_search_scopes(
             request_text=question, current_channel_id=channel, caller_id=owner, team_id=policy_team,
-            configured_channels=configured_channels, allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+            configured_channels=configured_channels,
             client=client, intent=SearchIntent("current"))
         search_grant = plan_search_scopes(
             request_text=question, current_channel_id=channel, caller_id=owner, team_id=policy_team,
-            configured_channels=configured_channels, allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+            configured_channels=configured_channels,
             client=client, intent=SearchIntent("all"))
         agent_settings = default_settings
         request_backend = agent_settings.backend or backend

@@ -2507,17 +2507,10 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                 "SLACK_BOT_TOKEN": "xoxb-test",
                 "SLACK_TEAM_ID": "T123",
                 "SLACK_CHANNEL_IDS": "C123,C456",
-                "MFS_ALLOWED_SCOPES": (
-                    "slack://tag-t123/channels/general__C123,"
-                    "slack://tag-t123/channels/support__C456"
-                ),
                 "OPENTAG_SLACK_STREAMING": "0",
                 "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
-        ), patch(
-            "scripts.slack_search_scope.resolve_mfs_channel_scope",
-            side_effect=lambda channel: channel.scope,
         ), patch.object(
             slack_socket_agent, "WorkingIndicator", return_value=indicator
         ), patch.object(
@@ -2551,17 +2544,10 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                 "SLACK_BOT_TOKEN": "xoxb-test",
                 "SLACK_TEAM_ID": "T123",
                 "SLACK_CHANNEL_IDS": "C123,C456",
-                "MFS_ALLOWED_SCOPES": (
-                    "slack://tag-t123/channels/general__C123,"
-                    "slack://tag-t123/channels/old-support__C456"
-                ),
                 "OPENTAG_SLACK_STREAMING": "0",
                 "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
-        ), patch(
-            "scripts.slack_search_scope.resolve_mfs_channel_scope",
-            side_effect=lambda channel: channel.scope,
         ), patch.object(
             slack_socket_agent, "build_thread_text", return_value="thread"
         ), patch.object(
@@ -2583,7 +2569,6 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
         plan = run_backend.call_args.kwargs["scope_plan"]
         grant = run_backend.call_args.kwargs["slack_search_grant"]
         self.assertEqual("current", plan.mode)
-        self.assertEqual(("slack://tag-t123/channels/general__C123",), plan.scopes)
         self.assertEqual("all", grant.mode)
         self.assertEqual({"C123": "general", "C456": "support"}, grant.channel_labels)
 
@@ -2596,17 +2581,10 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                 "SLACK_BOT_TOKEN": "xoxb-test",
                 "SLACK_TEAM_ID": "T123",
                 "SLACK_CHANNEL_IDS": "C123,C456",
-                "MFS_ALLOWED_SCOPES": (
-                    "slack://tag-t123/channels/general__C123,"
-                    "slack://tag-t123/channels/support__C456"
-                ),
                 "OPENTAG_SLACK_STREAMING": "0",
                 "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
-        ), patch(
-            "scripts.slack_search_scope.resolve_mfs_channel_scope",
-            side_effect=lambda channel: channel.scope,
         ), patch.object(
             slack_socket_agent, "build_thread_text", return_value="thread"
         ), patch.object(
@@ -2628,15 +2606,8 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
         plan = run_backend.call_args.kwargs["scope_plan"]
         grant = run_backend.call_args.kwargs["slack_search_grant"]
         self.assertEqual("current", plan.mode)
-        self.assertEqual(("slack://tag-t123/channels/general__C123",), plan.scopes)
         self.assertEqual("all", grant.mode)
-        self.assertEqual(
-            (
-                "slack://tag-t123/channels/general__C123",
-                "slack://tag-t123/channels/support__C456",
-            ),
-            grant.scopes,
-        )
+        self.assertEqual(("C123", "C456"), grant.channel_ids)
 
     def test_scope_meaning_is_left_to_runtime_agent(self) -> None:
         fake_app = FakeApp()
@@ -5211,3 +5182,11 @@ class RetiredSlackSettingsTests(unittest.TestCase):
             self.assertEqual(b"current", path.read_bytes())
             self.assertEqual(b"previous", backup.read_bytes())
             self.assertFalse(path.with_name(path.name + ".retired-v1.complete.json").exists())
+
+
+class ActionTokenTests(unittest.TestCase):
+    def test_the_events_action_token_is_found_where_slack_puts_it(self) -> None:
+        self.assertEqual("a1", slack_socket_agent.slack_action_token({"action_token": "a1"}, {}))
+        self.assertEqual("a2", slack_socket_agent.slack_action_token({}, {"event": {"action_token": "a2"}}))
+        self.assertEqual("a3", slack_socket_agent.slack_action_token({}, {"action_token": " a3 "}))
+        self.assertIsNone(slack_socket_agent.slack_action_token({"action_token": ""}, {}))
