@@ -45,86 +45,28 @@ it("draws Welcome on the same canvas as installation", () => {
   expect(container.querySelector(".body.install")).toBeTruthy();
 });
 
-it("tells people the install needs about 1.8 GB, as measured", () => {
+it("tells people the install needs about 1.2 GB, now that no search model is downloaded", () => {
   render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
-  expect(screen.getByText("1.8 GB")).toBeTruthy();
-  expect(screen.queryByText("650 MB")).toBeNull();
+  expect(screen.getByText("1.2 GB")).toBeTruthy();
+  expect(screen.queryByText("1.8 GB")).toBeNull();
 });
 
-const toModel = () => fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-it("keeps the first screen to what installing means, and asks about search on a second one", () => {
-  render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
-  expect(screen.getByText("Install Tag")).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Install Tag" })).toBeNull();
-  expect(screen.queryByRole("switch")).toBeNull();
-  toModel();
-  expect(screen.getByText("Memory search")).toBeTruthy();
-  expect(screen.getByText("How should memory search?")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Install Tag" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
-});
-
-it("names the built-in search model and its size", () => {
-  render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
-  toModel();
-  expect(screen.getByRole("radio", { name: "Built in" }).getAttribute("aria-checked")).toBe("true");
-  expect(screen.getByText(/bge-m3 on this computer/)).toBeTruthy();
-  expect(screen.getByText(/Private, offline, 560 MB/)).toBeTruthy();
-});
-
-it("lets people skip the built-in search model and name their own on a screen of its own", () => {
+it("installs from the first screen, with no search model to choose", () => {
   const install = vi.fn();
   render(<Welcome api={demoBridge()} platform="macos" install={install} />);
-  toModel();
-  expect(screen.queryByLabelText("Endpoint address")).toBeNull();
+  expect(screen.queryByRole("radio")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith({ skipModel: false, baseUrl: "", model: "", apiKey: "" });
-  fireEvent.click(screen.getByRole("radio", { name: "Your own endpoint" }));
-  expect(screen.getByRole("radio", { name: "Your own endpoint" }).getAttribute("aria-checked")).toBe("true");
-  expect(screen.queryByLabelText("Endpoint address")).toBeNull();
-  expect(screen.queryByRole("button", { name: "Install Tag" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-  fireEvent.change(screen.getByLabelText("Endpoint address"), { target: { value: " http://localhost:11434/v1 " } });
-  fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "nomic-embed-text" } });
-  fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith({ skipModel: true, baseUrl: "http://localhost:11434/v1", model: "nomic-embed-text", apiKey: "" });
-  fireEvent.change(screen.getByLabelText("API key (optional)"), { target: { value: " sk-synthetic " } });
-  fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith({ skipModel: true, baseUrl: "http://localhost:11434/v1", model: "nomic-embed-text", apiKey: "sk-synthetic" });
-});
-
-it("keeps what was typed when going back and forward, and the replay has no search screen", () => {
-  render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
-  toModel();
-  fireEvent.click(screen.getByRole("radio", { name: "Your own endpoint" }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-  fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "bge-m3" } });
-  fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  expect(screen.getByRole("radio", { name: "Your own endpoint" }).getAttribute("aria-checked")).toBe("true");
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-  expect((screen.getByLabelText("Model name") as HTMLInputElement).value).toBe("bge-m3");
+  expect(install).toHaveBeenCalledTimes(1);
   cleanup();
   render(<Welcome api={demoBridge()} platform="macos" preview={vi.fn()} />);
-  expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Install Tag" })).toBeNull();
 });
 
-it("tells the installer to skip the built-in model download", async () => {
+it("passes the installer no model options and says the command is ready", async () => {
   const api = demoBridge();
-  const install = vi.spyOn(api, "install");
-  render(<Installing api={api} skipModel done={vi.fn()} retry={vi.fn()} cancel={vi.fn()} />);
-  await vi.waitFor(() => expect(install).toHaveBeenCalled());
-  expect(install.mock.calls[0][3]).toEqual({ skipMemoryModel: true });
-});
-
-it("says on the Installed screen that the built-in model still downloads, and says nothing when it was skipped", async () => {
-  for (const skipModel of [false, true]) {
-    const api = demoBridge();
-    api.install = vi.fn(async (_channel, _line, exit) => { setTimeout(() => exit(0)); return { send: vi.fn(), stop: vi.fn() }; });
-    const view = render(<Installing api={api} skipModel={skipModel} done={vi.fn()} retry={vi.fn()} cancel={vi.fn()} />);
-    expect(await screen.findByText("Tag is installed")).toBeTruthy();
-    expect(!!screen.queryByText(/search model is still downloading/)).toBe(!skipModel);
-    view.unmount();
-  }
+  api.install = vi.fn(async (_channel, _line, exit) => { setTimeout(() => exit(0)); return { send: vi.fn(), stop: vi.fn() }; });
+  render(<Installing api={api} done={vi.fn()} retry={vi.fn()} cancel={vi.fn()} />);
+  expect(await screen.findByText("Tag is installed")).toBeTruthy();
+  expect(screen.getByText(/The tag command is ready/)).toBeTruthy();
+  expect(vi.mocked(api.install).mock.calls[0]).toHaveLength(3);
 });

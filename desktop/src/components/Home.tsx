@@ -18,7 +18,6 @@ import { useNight } from "../lib/appearance";
 import { ordered, useOrder, useReorder } from "../lib/order";
 import { useFresh, useListMotion } from "../lib/motion";
 import { Avatar, ErrorLine, Icon, MOON, Primary, Sky, Switch, tagIcon, WorkspaceMark } from "./ui";
-import { ModelDownloadNotice } from "./ModelDownload";
 import { UpdateNotice, type Deferral } from "./UpdateNotice";
 
 export const HOW_TAG_WORKS = "https://hover.team/tag";
@@ -132,7 +131,6 @@ export function Home(props: Props) {
         </div>
       </Sky>
       <div className="body home-body">
-        <ModelDownloadNotice api={props.api} />
         <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} defer={props.defer} settings={() => props.showSettings("updates")} />
         {/* The window stays one height; a long Tag list scrolls here, under the update banner. */}
         <div className="home-scroll" ref={art.ref}>
