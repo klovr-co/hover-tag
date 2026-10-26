@@ -1,6 +1,7 @@
 # ADR 0005: Resolve independent Tag instances over one shared installation
 
-- Status: Accepted
+- Status: Accepted; the shared MFS service it describes was removed by
+  [ADR 0012](0012-live-slack-search.md)
 - Date: 2026-09-21
 
 ## Context
