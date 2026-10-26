@@ -114,6 +114,19 @@ describe("setup", () => {
     expect(state.error).toMatch(/didn't accept/);
   });
 
+  it("checks a sign-in code until Slack answers, so it is sent only once", () => {
+    const login = JSON.stringify({ type: "question", id: "slack_login", kind: "slack_login", prompt: "Sign in to Slack",
+      sign_in_line: "/slackauthticket ABC123", can_go_back: false });
+    const workspace = JSON.stringify({ type: "question", id: "workspace", kind: "choose", prompt: "Which workspace?",
+      options: ["Klovr"], option_ids: ["T0KLOVR1"] });
+    let state = setupReducer(initialSetup, { type: "line", line: login });
+    expect(state.checkingCode).toBe(false);
+    state = setupReducer(state, { type: "answered" });
+    expect(state.checkingCode).toBe(true);
+    expect(setupReducer(state, { type: "line", line: login }).checkingCode).toBe(false);
+    expect(setupReducer(state, { type: "line", line: workspace }).checkingCode).toBe(false);
+  });
+
   it("explains a setup that ended without a result", () => {
     let state = setupReducer(initialSetup, { type: "exit", code: 2, stderr: "usage\ntag_cli.py: error: --json supports list" });
     expect(state.outcome).toBe("failed");

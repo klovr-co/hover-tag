@@ -171,6 +171,38 @@ class SetupBackTests(unittest.TestCase):
             self.assertNotIn("SLACK_CHANNEL_IDS", tag_config.load_config(config))
 
 
+    def test_a_stopped_setup_keeps_why_in_the_setup_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            # The CLI selects the Tag home; --config may live anywhere, as it does here.
+            home = Path(directory) / "home"
+            config = Path(directory) / "settings.json"
+            tag_config.save_config(config, {"OPENTAG_BOT_NAME": "Maya's Tag"})
+            log = home / "state/setup.log"
+            log.parent.mkdir(parents=True)
+            log.write_text("", encoding="utf-8")
+            if os.name != "nt":
+                log.chmod(0o644)  # An earlier log that isn't private yet.
+            failures = [RuntimeError("The setup client chose an option that was not offered"), KeyError("workspace")]
+
+            def guided(_path, **_):
+                raise failures.pop(0)
+
+            with patch.object(sys, "argv", ["opentag_setup.py", "--config", str(config), "--review"]), patch.dict(
+                os.environ, {setup_ui.PROTOCOL_ENV: "jsonl", "TAG_HOME": directory, "TAG_INSTANCE_HOME": str(home)}
+            ), patch.object(opentag_setup, "guided_setup", side_effect=guided), patch.object(
+                opentag_setup.tag_telemetry, "SetupSession"
+            ), patch.object(sys, "stdout", StringIO()), patch.object(sys, "stderr", StringIO()) as stderr:
+                self.assertEqual(opentag_setup.main(), 1)
+                self.assertIn("not offered", stderr.getvalue())
+                with self.assertRaises(KeyError):
+                    opentag_setup.main()
+            text = log.read_text(encoding="utf-8")
+            self.assertEqual(text.count("Setup stopped"), 2)
+            self.assertIn("RuntimeError: The setup client chose an option that was not offered", text)
+            self.assertIn("KeyError: 'workspace'", text)
+            if os.name != "nt":
+                self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+
 class StepSessionBackTests(unittest.TestCase):
     def test_back_is_refused_unless_the_question_allows_it(self):
         session = setup_session._Supervisor.__new__(setup_session._Supervisor)

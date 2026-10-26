@@ -405,3 +405,29 @@ it("shows each start step as it happens, then the message to send", async () => 
   // It answers now; history search catches up.
   expect(screen.getByText(/Nova can answer now. It's still reading older messages in #prod-hover/)).toBeTruthy();
 });
+
+it("sends a Slack sign-in code once while Slack checks it", async () => {
+  const api = demoBridge();
+  let emit!: (line: string) => void;
+  const send = vi.fn();
+  api.setup = async (_args, onLine) => { emit = onLine; return { send, stop: vi.fn() }; };
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+  const login = JSON.stringify({ type: "question", id: "slack_login", kind: "slack_login", prompt: "Sign in to Slack",
+    sign_in_line: "/slackauthticket ABC123", can_go_back: false });
+  act(() => emit(login));
+  fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+  fireEvent.click(screen.getByRole("button", { name: "I clicked Confirm" }));
+  const input = screen.getByLabelText("Code from Slack");
+  fireEvent.change(input, { target: { value: "541R1jmr" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  // A second Enter or click would answer the next question, the workspace, with the code.
+  fireEvent.keyDown(input, { key: "Enter" });
+  fireEvent.click(screen.getByRole("button", { name: /Checking/ }));
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(send).toHaveBeenCalledWith({ answer: "541R1jmr" });
+  // Slack refused it: the code can be sent again.
+  act(() => emit(login));
+  fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+  expect(send).toHaveBeenCalledTimes(2);
+});
