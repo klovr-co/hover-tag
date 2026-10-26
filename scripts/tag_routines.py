@@ -777,8 +777,12 @@ def add_run(state: dict[str, Any], run: dict[str, Any]) -> None:
     """
     ids = {entry.get("run_id") for entry in state["history"]}
     if run.get("run_id") in ids:
-        # A stuck run that finally returns, after its slot was already recorded.
-        run["run_id"] = f"{run['run_id']}:{sum(1 for i in ids if str(i).startswith(run['run_id']))}"
+        # A stuck run that finally returns, after its slot was already recorded. Take the first
+        # free suffix: trimmed history can drop earlier ones, so counting them could repeat one.
+        base, number = run["run_id"], 1
+        while f"{base}:{number}" in ids:
+            number += 1
+        run["run_id"] = f"{base}:{number}"
     state["history"].append(run)
     outcome = run.get("outcome")
     if outcome in {"posted", "no_reply"}:

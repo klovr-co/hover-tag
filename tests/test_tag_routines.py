@@ -368,6 +368,15 @@ class StateStoreTests(unittest.TestCase):
         routines.add_run(state, self.record("failed"))
         self.assertEqual(state["consecutive_failures"], 2)
 
+    def test_a_slot_recorded_again_gets_an_unused_id_after_history_is_trimmed(self):
+        state = routines.empty_state()
+        # The slot was recorded as R, R:1 and R:2; trimming dropped the oldest two.
+        state["history"] = [{"run_id": "R:2", "outcome": "skipped"}, {"run_id": "R", "outcome": "skipped"}]
+        routines.add_run(state, {"run_id": "R", "outcome": "skipped"})
+        routines.add_run(state, {"run_id": "R", "outcome": "skipped"})
+        ids = [entry["run_id"] for entry in state["history"]]
+        self.assertEqual(ids, ["R:2", "R", "R:1", "R:3"])
+
     def test_each_scheduled_run_has_one_id_per_slot(self):
         slot = datetime(2026, 10, 13, 9, 3, tzinfo=UTC)
         first = routines.run_record(self.item, trigger="schedule", slot=slot, outcome="posted")
