@@ -18,6 +18,7 @@ import { useNight } from "../lib/appearance";
 import { ordered, useOrder, useReorder } from "../lib/order";
 import { useFresh, useListMotion } from "../lib/motion";
 import { Avatar, ErrorLine, Icon, MOON, Primary, Sky, Switch, tagIcon, WorkspaceMark } from "./ui";
+import { AddonNav } from "./Addons";
 import { ModelDownloadNotice } from "./ModelDownload";
 import { UpdateNotice, type Deferral } from "./UpdateNotice";
 
@@ -122,6 +123,7 @@ export function Home(props: Props) {
             <h2>Your Tags</h2>
             <div className="sum"><span className={sum.on ? "sq" : "sq off"} />{sum.text}</div>
           </div>
+          <AddonNav />
           <button className="sky-btn" aria-label="Settings" title="Settings" onClick={() => showSettings()}><Icon name="gear" size={16} /></button>
           <button className={rows.length > 2 && !setup.length && !urgent ? "add solid" : "add"} onClick={add}>
             <Icon name="plus" />Add Tag

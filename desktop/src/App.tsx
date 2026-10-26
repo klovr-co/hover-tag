@@ -21,6 +21,8 @@ import { AISettings } from "./components/AISettings";
 import { MemorySettings, Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
 import { source, Toast } from "./components/ui";
+import { AddonScreen } from "./components/Addons";
+import { AddonsProvider } from "./lib/addons/runtime";
 
 type Screen =
   | { name: "loading" }
@@ -34,7 +36,9 @@ type Screen =
   /** `opened` counts Slack links, so a second link resets an open Tag screen. */
   | { name: "tag"; id: string; tab?: TagTab; opened?: number }
   /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
-  | { name: "replay" };
+  | { name: "replay" }
+  /** A screen an add-on adds to the sidebar. */
+  | { name: "addon"; screen: string };
 
 /** What each screen counts as in usage data. */
 const SCREEN_EVENT: Partial<Record<Screen["name"], AppEvents["app_screen_viewed"]["screen"]>> = {
@@ -51,6 +55,8 @@ const DEVELOPMENT_UPDATES = "Updates are off in development builds. Use the inst
 /** Window widths: everyday screens, and Tag detail's Slack layout. */
 export const WIDTH = 520;
 export const WIDE = 800;
+/** Add-on screens, and a Tag while its Knowledge tab shows add-on folders. */
+export const ROOMY = 1040;
 
 /** Keep the Tags the Swift app restored at login, then let the login service do it. */
 export async function migrateFromSwiftApp(api: Bridge, legacy: string[], existing: string[]) {
@@ -114,6 +120,7 @@ export function App() {
     setToast(text);
     setTimeout(() => setToast((current) => (current === text ? null : current)), 2600);
   }, []);
+  const openAddonScreen = useCallback((key: string) => setScreen({ name: "addon", screen: key }), []);
 
   // Make sure this Tag can be driven by this app.
   useEffect(() => {
@@ -210,7 +217,11 @@ export function App() {
   }, [api, info, tags, track, telemetry.reload]);
 
   // The window fits its content; most screens hold one fixed height (see `fixed` below), and Tag detail is wider.
-  const width = screen.name === "tag" ? WIDE : WIDTH;
+  // Add-on screens, and a Tag's Knowledge tab, are wider still, since that's where add-ons draw.
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const roomy = screen.name === "addon" || (screen.name === "tag" && knowledgeOpen);
+  const wide = screen.name === "tag" || screen.name === "addon";
+  const width = roomy ? ROOMY : wide ? WIDE : WIDTH;
   useLayoutEffect(() => {
     if (!api || !root) return;
     const observer = new ResizeObserver(([entry]) => void api.fitWindow(width, Math.ceil(entry.target.getBoundingClientRect().height)));
@@ -295,11 +306,12 @@ export function App() {
     setQuick({ workspace: group.key, workspaceName: group.label, workspaceIcon: group.icon, enterprise: group.enterprise,
       modelsFrom: group.rows.find((row) => row.valid && !isDraft(row))?.id ?? null });
   // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
-  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai" || screen.name === "memory";
+  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai" || screen.name === "memory" || screen.name === "addon";
   return (
     <TrackContext.Provider value={track}>
       <MoodContext.Provider value={moods}>
-        <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
+        <AddonsProvider api={api} info={info} say={say} openScreen={openAddonScreen} tagIds={tags.rows.map((r) => r.id)}>
+        <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${wide ? " wide" : ""}${roomy ? " roomy" : ""}${screen.name === "addon" ? " addon-screen" : ""}`}>
           {screen.name === "replay" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
           {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={(choice) => setScreen({ name: "installing", attempt: 0, ...choice })} />}
           {screen.name === "installing" && (
@@ -341,13 +353,15 @@ export function App() {
           {screen.name === "tag" && (
             <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
               canDescribe={capabilities.includes("describe")} canRefreshModels={capabilities.includes(SAVED_MODELS_CAPABILITY)}
-              canRoutines={capabilities.includes("routines")}
+              canRoutines={capabilities.includes("routines")} onKnowledge={setKnowledgeOpen}
               showSettings={() => setScreen({ name: "settings" })}
               finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
               openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />
           )}
+          {screen.name === "addon" && <AddonScreen screen={screen.screen} back={home} />}
           <Toast text={toast} />
         </main>
+        </AddonsProvider>
       </MoodContext.Provider>
     </TrackContext.Provider>
   );

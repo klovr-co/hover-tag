@@ -19,10 +19,12 @@ import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
 import { modelSaveText, ModelMenu, ModelWarning, PermissionsRow, SaveBar, ThinkingRow } from "./AI";
 import { Routines } from "./Routines";
+import { AddonChannelSwitches, AddonKnowledgeFolders, AddonTagActions } from "./Addons";
+import { useAddons } from "../lib/addons/runtime";
 import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
-export type Tab = "activity" | "channels" | "routines" | "logs" | "details";
+export type Tab = "activity" | "channels" | "knowledge" | "routines" | "logs" | "details";
 
 interface Props {
   api: Bridge;
@@ -42,6 +44,8 @@ interface Props {
   canDescribe?: boolean;
   /** The installed Tag has routines (`routines` capability). */
   canRoutines?: boolean;
+  /** Told when the Knowledge tab opens or closes, so the window can make room for add-on folders. */
+  onKnowledge?: (open: boolean) => void;
   /** The installed Tag can read model lists again (`saved-models` capability). */
   canRefreshModels?: boolean;
 }
@@ -55,12 +59,16 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false, onKnowledge }: Props) {
   const rows = tags.rows;
   const start = rows.find((row) => row.id === initial);
   const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
   const [selected, setSelected] = useState<Selection>({ kind: "tag", id: initial });
   const [tab, setTab] = useState<Tab>(initialTab);
+  useEffect(() => {
+    onKnowledge?.(tab === "knowledge");
+    return () => onKnowledge?.(false);
+  }, [tab, onKnowledge]);
   const [query, setQuery] = useState("");
   const [hideErrors, setHideErrors] = useState(true);
   const all = groups(rows);
@@ -268,6 +276,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
   finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRefreshModels: boolean; canRoutines: boolean;
 }) {
   const state = status(row);
+  const { folders } = useAddons();
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
   const [limit, setLimit] = useState(50);
   const [hasMore, setHasMore] = useState(false);
@@ -342,11 +351,12 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
               {channels.length > 0 && ` · in ${channels.length === 1 ? `#${channelName(channels[0])}` : `${channels.length} channels`}`}</span>
           </span>
         </div>
+        <AddonTagActions tag={row.id} />
         <Switch on={on} busy={tags.busy.has(row.id)} label={`${on ? "Stop" : "Start"} ${title(row)}`} onClick={() => void tags.toggle(row)} />
       </div>
       <div className="sl-tabbar">
       <div className="sl-tabs" role="tablist">
-        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ...(canRoutines ? [["routines", "Routines", null] as const] : []), ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
+        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ...(folders.length ? [["knowledge", "Knowledge", null] as const] : []), ...(canRoutines ? [["routines", "Routines", null] as const] : []), ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
             {label}{count !== null && <> <span className="tcount">{count}</span></>}
           </button>
@@ -367,6 +377,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
                 {channels.map((c) => (
                   <div key={c.id} className="opt">
                     <span className="hash">#</span><span className="label" style={{ flex: 1 }}>{channelName(c)}</span>
+                    <AddonChannelSwitches target={{ tag: row.id, channel: c }} />
                     <button className="link" onClick={() => void api.open(slackChannel(row.slack_workspace ?? "", c.id))}>Open in Slack <Icon name="external" /></button>
                   </div>
                 ))}
@@ -376,6 +387,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
             )}
           </>
         )}
+        {tab === "knowledge" && <AddonKnowledgeFolders tag={row.id} />}
         {tab === "routines" && canRoutines && <Routines api={api} row={row} say={say} focus={routineFocus}
           showLogs={(find) => { setLogFind(find); setTab("logs"); }} />}
         {tab === "logs" && <Logs text={logView} copyLog={copyLog} find={logFind} clearFind={() => setLogFind("")} />}
