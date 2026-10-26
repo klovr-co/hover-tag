@@ -693,7 +693,7 @@ function Channels({ question, name, send, back }: { question: SetupQuestion; nam
   const answer = () => send([...joined.map((c) => c.i), ...chosen.map((c) => c.i)].sort((a, b) => a - b));
   const lock = <Icon name="lock" size={13} />;
   return (
-    <FlowBody title={`Where should ${name} start?`} lead="It answers and remembers conversations in these channels. Later invitations are added automatically."
+    <FlowBody title={`Where should ${name} start?`} lead="It answers in these channels. Later invitations are added automatically."
       foot={<>{question.can_go_back && <Back onClick={back} />}
         {question.allow_empty && <button className="link" onClick={() => send([])}>Skip for now</button>}<span className="spacer" />
         <Primary title={`Continue with ${total} channel${total === 1 ? "" : "s"}`} disabled={!total} onClick={answer} /></>}>
@@ -756,15 +756,11 @@ export function slackLink(ready: SetupReady, place: string) {
 }
 
 /** Plain words for what each start phase is doing, while it runs. */
-function phaseDetail(phase: Phase, name: string, channels: string[], seconds: number) {
+function phaseDetail(phase: Phase, name: string) {
   switch (phase) {
     case "prepare": return "Making sure its Slack app, picture and permissions are current.";
-    case "memory": return `Memory lets ${name} remember conversations. It loads once and stays on for all your Tags.`;
-    case "channels": {
-      const where = channels.length === 1 ? `#${channels[0]}` : channels.length ? `${channels.length} channels` : "its channels";
-      return seconds >= 20 ? `Reading recent messages in ${where} so ${name} has context. The first time can take a few minutes.`
-        : `Reading recent messages in ${where}.`;
-    }
+    case "memory": return `Opening ${name}'s own memory. It holds only what people ask ${name} to remember.`;
+    case "channels": return `Checking which channels ${name} was invited to. ${name} reads Slack live when someone asks.`;
     case "slack": return `Checking ${name}'s access, then connecting to Slack.`;
   }
 }
@@ -773,8 +769,8 @@ function elapsed(seconds: number) {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
-function StartSteps({ progress, name, channels, seconds, failed, error, detailed }: {
-  progress: StartProgress; name: string; channels: string[]; seconds: number; failed: boolean; error: string; detailed: boolean;
+function StartSteps({ progress, name, seconds, failed, error, detailed }: {
+  progress: StartProgress; name: string; seconds: number; failed: boolean; error: string; detailed: boolean;
 }) {
   // An older Tag reports no steps; show one honest step instead.
   const rows = detailed ? START_PHASES.map((phase) => ({ id: phase.id as Phase | null, title: phase.title, ...progress.phases[phase.id] }))
@@ -792,7 +788,7 @@ function StartSteps({ progress, name, channels, seconds, failed, error, detailed
               : st === "failed" ? <Icon name="bang" size={12} /> : null}</span>
             <div style={{ flex: 1 }}>
               <div className="stt">{row.title}{st === "running" && <span className="st-time">{elapsed(seconds)}</span>}</div>
-              {st === "running" && row.id && <div className="std">{phaseDetail(row.id, name, channels, seconds)}</div>}
+              {st === "running" && row.id && <div className="std">{phaseDetail(row.id, name)}</div>}
               {st === "failed" && <div className="std bad">{error || row.text || "Something went wrong."}</div>}
             </div>
           </div>
@@ -859,7 +855,6 @@ function Ready({ api, state, done, start, usageNote }: { api: Bridge; state: Set
     setStep("waiting");
   };
   const starting = step === "starting" || step === "failed";
-  const channels = (ready?.channels ?? []).map((c) => c.name);
   return (
     <>
       <Sky kind="ready" stars={90}>
@@ -878,7 +873,7 @@ function Ready({ api, state, done, start, usageNote }: { api: Bridge; state: Set
             : "Send this in Slack. We copy it for you."}</p>
           {ready?.ai && <p className="ai-line"><AgentMark backend={ready.ai.backend} size={18} /><span><b>{ready.ai.backend_name} connected</b></span></p>}
         </div>
-        {starting ? <StartSteps progress={progress} name={name} channels={channels} seconds={seconds} failed={step === "failed"} error={error} detailed={detailed} />
+        {starting ? <StartSteps progress={progress} name={name} seconds={seconds} failed={step === "failed"} error={error} detailed={detailed} />
           : (
           <div className="thread try-thread">
             <div className="thread-h">{place.dm ? "Direct message" : "Thread"}
@@ -889,10 +884,6 @@ function Ready({ api, state, done, start, usageNote }: { api: Bridge; state: Set
             </div>
             <div className="smsg"><OwnerMark icon={ready?.owner?.icon} />
               <div><div className="who">{ready?.owner?.name || "You"}<span>now</span></div><p>{!place.dm && <span className="mention">@{name}</span>}{!place.dm && " "}{TRY_PROMPTS[prompt]}</p></div></div>
-            {progress.phases.channels.background && step === "idle" && (
-              <p className="meta import-note">{name} can answer now. It's still reading older messages
-                in {channels.length === 1 ? `#${channels[0]}` : "its channels"}; questions about them work once that finishes.</p>
-            )}
             <div className="try-foot">
               {step === "idle" && <button className="link" onClick={() => setPrompt((prompt + 1) % TRY_PROMPTS.length)}>Try another message</button>}
               {step === "waiting" && <>Paste and send it in Slack. {ready && <button className="link" onClick={() => void api.open(slackLink(ready, place.id))}>Open Slack again</button>}</>}

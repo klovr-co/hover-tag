@@ -285,11 +285,11 @@ it("shows a whole channel setup status until the next complete update", async ()
   await vi.waitFor(() => expect(api.setup).toHaveBeenCalledTimes(1));
   act(() => emit(JSON.stringify({ type: "question", ...QUESTIONS.channels })));
   fireEvent.click(screen.getByRole("button", { name: "Continue with 1 channel" }));
-  const text = "✓ Slack connected\n◌ Preparing Slack memory for the selected channels…";
+  const text = "✓ Slack connected\n◌ Checking the selected channels…";
   act(() => emit(JSON.stringify({ type: "message", text })));
   expect(screen.getByRole("status").textContent).toBe(text);
-  act(() => emit(JSON.stringify({ type: "message", text: "Memory ready" })));
-  expect(screen.getByRole("status").textContent).toBe("Memory ready");
+  act(() => emit(JSON.stringify({ type: "message", text: "Channels ready" })));
+  expect(screen.getByRole("status").textContent).toBe("Channels ready");
 });
 
 it("stops a late setup session after the screen closes", async () => {
@@ -381,27 +381,26 @@ it("shows each start step as it happens, then the message to send", async () => 
   expect(await screen.findByText("Starting Nova…")).toBeTruthy();
   expect(start).toHaveBeenCalledWith("t1", expect.any(Function));
   act(() => {
-    report('{"type": "progress", "step": "memory", "label": "Memory", "state": "done", "text": "Healthy"}');
-    report('{"type": "progress", "step": "channel-memory", "label": "Channel memory", "state": "running", "text": "Waiting…"}');
+    report('{"type": "progress", "step": "memory", "label": "Memory", "state": "done", "text": "Ready"}');
+    report('{"type": "progress", "step": "channels", "label": "Channels", "state": "running", "text": "Checking which channels the Tag was invited to…"}');
   });
   expect(screen.getByText("Reading its channels").closest(".st")?.className).toContain("running");
-  expect(screen.getByText("Starting memory").closest(".st")?.className).toContain("done");
-  expect(screen.getByText(/Reading recent messages in #prod-hover/)).toBeTruthy();
+  expect(screen.getByText("Preparing its memory").closest(".st")?.className).toContain("done");
+  expect(screen.getByText(/Checking which channels Nova was invited to/)).toBeTruthy();
   // The message to send waits until the Tag can answer it.
   expect(screen.queryByText("What can you help me with?")).toBeNull();
   expect(screen.getByRole("button", { name: /Open Slack/ }).hasAttribute("disabled")).toBe(true);
 
-  await act(async () => finish("MFS scope did not become readable after indexing"));
+  await act(async () => finish("Couldn't check which channels the Tag is in"));
   expect(screen.getByText("Nova didn't start")).toBeTruthy();
   expect(screen.getByText("Reading its channels").closest(".st")?.className).toContain("failed");
-  expect(screen.getByText("MFS scope did not become readable after indexing")).toBeTruthy();
+  expect(screen.getByText("Couldn't check which channels the Tag is in")).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
   await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
-  act(() => report('{"type": "progress", "step": "channel-memory", "label": "Channel memory", "state": "info", "text": "Importing #prod-hover in the background"}'));
   await act(async () => finish(""));
   expect(screen.getByText("Say hi to Nova")).toBeTruthy();
   expect(screen.getByText("What can you help me with?")).toBeTruthy();
-  // It answers now; history search catches up.
-  expect(screen.getByText(/Nova can answer now. It's still reading older messages in #prod-hover/)).toBeTruthy();
+  // Nothing is imported first, so there is nothing to catch up on.
+  expect(screen.queryByText(/still reading older messages/)).toBeNull();
 });
