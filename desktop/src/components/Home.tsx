@@ -99,7 +99,6 @@ export function Home(props: Props) {
   const urgent = outdated || update.status === "failed";
   const sum = summary(rows);
   const { shown, extra } = roster(rows);
-  const running = live.find((row) => row.state === "running");
   const { order, setWorkspaces, setTags } = useOrder();
   const cards = ordered(groups(live), order);
   const reorder = useReorder(cards.map((g) => g.key), setWorkspaces);
@@ -167,31 +166,12 @@ export function Home(props: Props) {
           <WorkspaceCard key={group.key} group={group} drag={reorder.props(group.key)} movable={cards.length > 1}
             setTags={(ids) => setTags(group.key, ids)} {...props} />
         ))}
-        {rows.length > 0 && rows.length <= 2 && (
-          <>
-            {running && (
-              <div className="section">
-                <div className="sec-head"><h3>Try it in Slack</h3><span className="meta">in a channel you picked</span></div>
-                <div className="thread">
-                  <div className="smsg">
-                    <span className="you"><Icon name="user" size={16} /></span>
-                    <div>
-                      <div className="who">You<span>now</span></div>
-                      <p><span className="mention">@{title(running)}</span> pull this thread into a launch checklist with owners.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-            <button className="ghost-add" onClick={add}>
-              <span className="gi"><Icon name="plus" /></span>
-              <span><b>Add another Tag</b><span className="meta">Connect another workspace, or add a second Tag to {live[0]?.workspace_name || "the same one"}.</span></span>
-            </button>
-            <div className={`home-foot ${art.size}`}>
-              {art.size !== "none" && <img className="tags-row" src={fiveTags} alt="" />}
-              <button className="link" onClick={() => void api.open(HOW_TAG_WORKS)}>New to Tag? Read how Tag works <Icon name="arrow" /></button>
-            </div>
-          </>
+        {/* First run only: once a Tag exists, the list says enough. */}
+        {tags.loaded && rows.length === 0 && (
+          <div className={`home-foot ${art.size}`}>
+            {art.size !== "none" && <img className="tags-row" src={fiveTags} alt="" />}
+            <button className="link" onClick={() => void api.open(HOW_TAG_WORKS)}>New to Tag? Read how Tag works <Icon name="arrow" /></button>
+          </div>
         )}
         </div>
         {tags.error && <ErrorLine>{tags.error}</ErrorLine>}

@@ -113,6 +113,9 @@ All notable changes to Tag are documented here.
 
 ### Changed
 
+- Tag.app's Home is quieter with one or two Tags. The sample Slack message,
+  the Add another Tag card and the How Tag works footer now show only before
+  you have any Tags.
 - Always allow in Slack now saves a Codex rule for that Tag only, in the Tag's
   folder, instead of in your global Codex rules. Rules saved before stay global.
 - `OPENTAG_CLAUDE_TRANSPORT=print` now runs only when the Claude permission
