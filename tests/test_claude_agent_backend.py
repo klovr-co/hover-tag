@@ -427,6 +427,7 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual([str(self.root / "skill")], options.add_dirs)
         self.assertEqual("/bin/claude", options.cli_path)
         self.assertTrue(options.include_partial_messages)
+        self.assertEqual(64 * 1024 * 1024, options.max_buffer_size)
         self.assertTrue(FakeClient.instances[0].disconnected)
 
     def test_tag_thinking_level_reaches_the_sdk_effort_option(self) -> None:
@@ -888,6 +889,14 @@ class ClaudeAgentRunTests(unittest.TestCase):
                 yield None
 
         with self.assertRaisesRegex(ClaudeAgentError, "ended without a result"):
+            self.run_agent(script)
+
+    def test_oversized_message_says_what_to_ask_for_instead(self) -> None:
+        async def script(_client):
+            raise RuntimeError("Failed to decode JSON: JSON message exceeded maximum buffer size of 67108864 bytes...")
+            yield None
+
+        with self.assertRaisesRegex(ClaudeAgentError, "more than 64 MB.*smaller file"):
             self.run_agent(script)
 
     def test_missing_sdk_reports_actionable_error(self) -> None:

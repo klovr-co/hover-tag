@@ -72,6 +72,10 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- With Claude, a request that reads a large image, screenshot or PDF page now
+  finishes. Before, any tool result over 1 MB stopped it with "JSON message
+  exceeded maximum buffer size". Tag now allows 64 MB, and a result bigger than
+  that says to ask for a smaller file, fewer pages or fewer images.
 - With Claude, a message sent right after stopping a request that was running a
   command now gets an answer. Before, Tag replied "Open Tag finished without
   output."
