@@ -164,6 +164,22 @@ describe("Tag rows", () => {
     expect(addTo).toHaveBeenCalledWith(expect.objectContaining({ key: maya.slack_workspace }));
   });
 
+  it("keep the first-run extras to a Home with no Tags", async () => {
+    const { Home } = await import("./Home");
+    const props = { api: demoBridge(), reports: {}, problems: {}, activity: {}, firstName: "Maya",
+      update: { status: "current", update: null, phase: null, error: "" } as const, outdated: false, runUpdate: vi.fn(),
+      add: vi.fn(), addTo: vi.fn(), finishSetup: vi.fn(), open: vi.fn(), fixAI: vi.fn(), showSettings: vi.fn(), now: noon };
+    const none = { rows: [], loaded: true, busy: new Set<string>(), error: "" } as unknown as Tags;
+    const { rerender } = render(<Home {...props} tags={none} />);
+    expect(screen.getByText("Bring your first Tag to Slack")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Read how Tag works/ })).toBeTruthy();
+    const two = { ...none, rows: [maya, research] } as unknown as Tags;
+    rerender(<Home {...props} tags={two} />);
+    expect(screen.queryByText("Try it in Slack")).toBeNull();
+    expect(screen.queryByText("Add another Tag")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Read how Tag works/ })).toBeNull();
+  });
+
   it("say once that usage data is on, with Learn more opening Settings", async () => {
     const { Home } = await import("./Home");
     const tags = { rows: [maya], loaded: true, busy: new Set<string>(), error: "" } as unknown as Tags;
