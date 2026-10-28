@@ -78,8 +78,33 @@ skills (see Open decisions). Tag never writes into a folder of yours
 (`OPENTAG_WORKDIR`): skills there are shown, but get no version written.
 Tag's own `tag-*` skills change with releases and get no badge.
 
-**How Tag notices a new version.** For each skill, a hash of its files with
-the `metadata.version` line removed, kept with the level in
+**Specialties are parts of a skill.** Neither backend has nested skills, so
+a skill can keep extra instruction files in a `specialties/` folder, and its
+`SKILL.md` says when to open each one (progressive disclosure):
+
+```
+launch-feedback/
+  SKILL.md          says when to open each specialty
+  specialties/
+    video.md        opened only when the post is a video
+    blog-post.md    opened only for blog posts
+  scripts/
+```
+
+- Tag lists the `*.md` files directly in `specialties/`. A specialty's name is
+  the `name:` line at the top of its file if there is one, else its file name
+  in words (`blog-post.md` is "Blog post").
+- A specialty has no version or level of its own. It is one of the skill's
+  files, so editing it makes the skill's next version, and opening it during
+  a run counts as using the skill.
+- Tag.app lists them under the skill: "launch-feedback v3 · ⭐ Lv 7 ·
+  Specialties: Video, Blog post". The Slack footer shows only the skill.
+- Nothing in either backend loads them by itself, so a skill whose
+  `SKILL.md` never mentions a specialty never uses it. `tag NAME skill list`
+  flags a specialty its `SKILL.md` doesn't name.
+
+**How Tag notices a new version.** For each skill, a hash of all its files
+(specialties and scripts included) with the `metadata.version` line removed, kept with the level in
 `state/skills.json`. Tag compares hashes:
 
 - after every run, since the agent may edit a skill during a request;
@@ -121,7 +146,7 @@ for XP. Runs that used no skill change nothing.
 **Tag proposes a skill, a person approves.** From ADR 0012, only the skill
 part stays: the Tag may propose a `SKILL.md` (text only, up to 8,000
 characters) in a thread, and the requester approves it on a card within an
-hour. Routines use #237's `tag routine add`.
+hour. Proposing specialties with a skill is a follow-up. Routines use #237's `tag routine add`.
 
 **Kept from ADR 0011 and 0012:** Lead's routing, Tag creation on hold, and
 the golden-task harness (rewritten with skill tasks). Separate instances only
@@ -145,11 +170,11 @@ for a real boundary.
    skill proposals. Add personality and proactivity to the Tag's settings.
 2. `tag_skills.py`: find skills, read and write `metadata.version`, hashes,
    XP and levels in `state/skills.json`; `tag NAME skill list --json` and the
-   `skills` capability.
+   `skills` capability, with each skill's specialties.
 3. `skill_used` events in both normalizers; the bridge collects them, adds the
    footer, and grants XP after the settling period unless the reply was
    deleted or got 👎.
-4. Tag.app skill list with badges and progress.
+4. Tag.app skill list with badges, progress and specialties.
 5. Golden tasks for skills, offline with the fake model; paid runs need a
    budget.
 
