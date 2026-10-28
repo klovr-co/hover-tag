@@ -158,9 +158,11 @@ class SchedulerTests(SchedulerBase):
         self.assertIsNone(self.states.load(waiting["id"])["waiting"])
 
     def test_routines_saved_together_do_not_all_start_together(self):
-        # IDs are random and each gets 1 of 5 offsets: 3 routines shared one 4% of the time, 10 almost never.
-        anchors = {self.add(name=f"R{i}", channel=f"C0{i}ABCDEFG")["anchor"] for i in range(10)}
-        self.assertGreater(len(anchors), 1)
+        # Fixed IDs: random ones share a stagger minute one time in 25.
+        ids = iter(["r-0000000001", "r-0000000002", "r-0000000006"])
+        with mock.patch.object(routines, "new_routine_id", lambda: next(ids)):
+            anchors = {self.add(name=f"R{i}", channel=f"C0{i}ABCDEFG")["anchor"] for i in range(3)}
+        self.assertEqual(len(anchors), 3)
 
     def test_after_sleep_missed_slots_collapse_into_one_catch_up(self):
         item = self.add()
