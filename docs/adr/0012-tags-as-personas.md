@@ -1,6 +1,6 @@
 # ADR 0012: One agent loop; Tags are personas that bundle skills
 
-- Status: Accepted (2026-10-26)
+- Status: Accepted (2026-10-26); to be superseded by [ADR 0013](0013-skills-and-levels.md), Proposed
 - Date: 2026-10-25
 - Issue: [#232](https://github.com/klovr-co/hover-tag/issues/232), PR [#238](https://github.com/klovr-co/hover-tag/pull/238)
 - Related: [ADR 0001](0001-credential-boundary.md), [ADR 0005](0005-multiple-tag-instances.md),
