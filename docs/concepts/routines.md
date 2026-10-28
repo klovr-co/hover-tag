@@ -96,8 +96,8 @@ the latest one once if it was due in the last seven days. Use
 | Failed, Stopped at its spend or time limit | The run stopped. Five failures in a row pause the routine and say so in its channel; resuming it starts the count again. If its channel or owner is no longer allowed, it pauses at once. |
 | Missed | The computer was asleep or the Tag was stopped. |
 | Skipped | The previous run was still going, or a newer run replaced it while it waited. A Tag runs two routines at a time; others wait their turn, one waiting run per routine. |
-| Interrupted | The Tag stopped during the run. It isn't run again, so nothing posts twice. It counts as a failure, so a routine that stops the Tag every time is paused. |
-| Stopped | Someone stopped the run, or paused or removed the routine while it ran. |
+| Interrupted | The Tag stopped during the run. It isn't run again, so nothing posts twice, and the channel isn't told. It counts as a failure, so a routine that stops the Tag every time is paused. |
+| Stopped | Someone stopped the run, or paused or removed the routine while it ran. A pause or removal stops the run within seconds, so it spends no more. |
 | Needs approval | The routine changed after it was approved. Save it again to approve it, then resume it. |
 
 If a running Tag stops checking its routines, for example because
