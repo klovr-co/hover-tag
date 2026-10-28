@@ -1,0 +1,5 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  # Request changes while CodeRabbit has open findings and approve once they're
+  # resolved. Mergify queues a PR only with an approval (see .mergify.yml).
+  request_changes_workflow: true

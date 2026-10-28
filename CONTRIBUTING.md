@@ -97,9 +97,10 @@ queue the PR.
 `queue` label or comment `@mergifyio queue`. Mergify then:
 
 1. Waits until every CI and clean-install check passes, CodeRabbit has
-   reviewed the latest push, every review thread is resolved, and no review
-   requests changes. Fix each CodeRabbit comment, or reply with why not, and
-   resolve its thread.
+   approved, every review thread is resolved, and no review requests changes.
+   Fix each CodeRabbit comment, or reply with why not, and resolve its thread;
+   CodeRabbit approves once its threads are resolved. If it skipped the review
+   for its rate limit, comment `@coderabbitai review`.
 2. Merges the base branch into the PR and waits for the checks again.
 3. Squash-merges the PR, one PR at a time, so prerelease numbers follow merge
    order.
