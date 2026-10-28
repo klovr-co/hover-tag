@@ -69,6 +69,12 @@ unknown `release:*` labels intentionally prevent publication. Beta lines only
 accept `release:skip`; patch and minor labels begin alpha lines. Stable releases
 remain manually qualified and published; see `RELEASE.md`.
 
+### Merging pull requests
+
+Merge through the Mergify merge queue, never with `gh pr merge` or GitHub's
+merge button. Set any release label first, then add the `queue` label. See
+"Merging" in `CONTRIBUTING.md` and the rules in `.mergify.yml`.
+
 ### Release line targeting
 
 Before merging or recommending a merge, confirm which release the PR targets:
