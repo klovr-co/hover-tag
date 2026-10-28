@@ -96,8 +96,10 @@ queue the PR.
 `release/vX.Y.x`. Don't press GitHub's merge button. When a PR is ready, add the
 `queue` label or comment `@mergifyio queue`. Mergify then:
 
-1. Waits until every CI and clean-install check passes and no review requests
-   changes.
+1. Waits until every CI and clean-install check passes, CodeRabbit has
+   reviewed the latest push, every review thread is resolved, and no review
+   requests changes. Fix each CodeRabbit comment, or reply with why not, and
+   resolve its thread.
 2. Merges the base branch into the PR and waits for the checks again.
 3. Squash-merges the PR, one PR at a time, so prerelease numbers follow merge
    order.

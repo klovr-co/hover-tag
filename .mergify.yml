@@ -24,6 +24,10 @@ shared:
     - -draft
     - -conflict
     - "#changes-requested-reviews-by=0"
+    # CodeRabbit has reviewed the latest push, and every review thread
+    # (CodeRabbit's or a person's) is resolved.
+    - check-success-or-neutral=CodeRabbit
+    - "#review-threads-unresolved=0"
     # A PR for a later version stays unmerged until the current line ships
     # stable (see "Release lines" in RELEASE.md).
     - -label~=^target:v
