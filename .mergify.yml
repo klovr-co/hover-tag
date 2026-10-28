@@ -27,7 +27,7 @@ shared:
     # CodeRabbit approved (see .coderabbit.yaml), and every review thread,
     # CodeRabbit's or a person's, is resolved. CodeRabbit's check is neutral
     # even when it skips a review for its rate limit, so it can't be the gate.
-    - "#approved-reviews-by>=1"
+    - approved-reviews-by=coderabbitai[bot]
     - "#review-threads-unresolved=0"
     # A PR for a later version stays unmerged until the current line ships
     # stable (see "Release lines" in RELEASE.md).
