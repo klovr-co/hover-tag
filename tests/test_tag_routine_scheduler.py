@@ -158,8 +158,12 @@ class SchedulerTests(SchedulerBase):
         self.assertIsNone(self.states.load(waiting["id"])["waiting"])
 
     def test_routines_saved_together_do_not_all_start_together(self):
-        anchors = {self.add(name=f"R{i}", channel=f"C0{i}ABCDEFG")["anchor"] for i in range(3)}
-        self.assertGreater(len(anchors), 1)
+        # Fixed IDs whose stagger is 1, 2 and 3 minutes. Random IDs all land on the
+        # same minute about 1 run in 25, which made this test flaky.
+        ids = ["r-000000000c", "r-0000000006", "r-000000000e"]
+        anchors = {self.add(id=routine_id, name=f"R{i}", channel=f"C0{i}ABCDEFG")["anchor"]
+                   for i, routine_id in enumerate(ids)}
+        self.assertEqual(len(anchors), 3)
 
     def test_after_sleep_missed_slots_collapse_into_one_catch_up(self):
         item = self.add()
