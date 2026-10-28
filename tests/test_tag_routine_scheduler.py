@@ -182,6 +182,17 @@ class SchedulerTests(SchedulerBase):
         self.assertEqual([(h["outcome"], h["count"]) for h in self.history(item)], [("missed", 2)])
         self.assertIn("skips late runs", self.history(item)[0]["diagnostic"])
 
+    def test_a_clock_that_steps_back_does_not_record_a_missed_slot_twice(self):
+        item = self.add(catch_up="skip")
+        self.scheduler.tick()
+        self.advance(hours=1, minutes=30)
+        self.clock.now -= timedelta(hours=3)  # Far enough back that the next run is worked out again.
+        self.scheduler.tick()
+        self.clock.now += timedelta(hours=3)
+        self.scheduler.tick()
+        slots = [entry["scheduled_for"] for entry in self.history(item)]
+        self.assertEqual(len(slots), len(set(slots)), slots)
+
     def test_slightly_late_slots_still_run_normally(self):
         self.add()
         self.scheduler.tick()
@@ -878,7 +889,7 @@ class ConcurrencyTests(unittest.TestCase):
                 active[0] -= 1
             record = routines.run_record(routine, trigger=trigger, slot=slot, outcome="posted", started=now(), ended=now())
             with lock:
-                records.append(record["run_id"])
+                records.append(record)
             return record
 
         def spawn(work):
@@ -916,11 +927,13 @@ class ConcurrencyTests(unittest.TestCase):
         history_ids = [entry["run_id"] for entry in state["history"]]
         self.assertEqual(len(history_ids), len(set(history_ids)))
         kept = set(history_ids)
+        # Read IDs only now: recording a slot twice renames the second run's ID in its record.
+        run_ids = [record["run_id"] for record in records]
         # History keeps the newest entries; every finished run within that window is there exactly once.
-        recent = [run_id for run_id in records if run_id in kept]
+        recent = [run_id for run_id in run_ids if run_id in kept]
         self.assertEqual(len(recent), sum(1 for e in state["history"] if e["outcome"] == "posted"))
         if len(state["history"]) < routines.MAX_HISTORY:
-            self.assertEqual(sorted(recent), sorted(records))
+            self.assertEqual(sorted(recent), sorted(run_ids))
         self.assertGreater(datetime.fromisoformat(state["next_due"]), now() - timedelta(hours=1))
 
 
