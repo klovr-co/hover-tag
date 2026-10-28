@@ -194,6 +194,8 @@ class SchedulerTests(SchedulerBase):
         self.scheduler.tick()
         slots = [entry["scheduled_for"] for entry in self.history(item)]
         self.assertEqual(len(slots), len(set(slots)), slots)
+        # One entry can stand for several slots: the replay must not count an earlier one again.
+        self.assertEqual(sum(e["count"] for e in self.history(item) if e["outcome"] == "missed"), 2)
 
     def test_slightly_late_slots_still_run_normally(self):
         self.add()

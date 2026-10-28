@@ -5455,6 +5455,7 @@ def create_app(
         limit_hit: list[str] = []
         error_codes: list[str] = []
         cancelled: list[bool] = []
+        stopped_because: list[str] = []
         activity_run_id: str | None = None
         if rich_events_selected(request_backend):
             try:
@@ -5527,7 +5528,9 @@ def create_app(
             # Pausing or removing the routine stops the run, as a stop in Slack would, so it spends no more.
             # Once withdrawn, keep waiting for a run that is still starting, so it can't slip through.
             while not done.wait(ROUTINE_WITHDRAW_CHECK_SECONDS):
-                if withdrawn() is not None and (run := active_run(run_key)) is not None:
+                if (reason := withdrawn()) is not None and (run := active_run(run_key)) is not None:
+                    # Kept for the record: the routine may be resumed before the run ends.
+                    stopped_because.append(reason)
                     run.cancel()
                     return
 
@@ -5555,12 +5558,14 @@ def create_app(
                 finished = True
                 extra = {"tools_used": tools_used or None, "cost_usd": usage.get("cost_usd"),
                          "tokens": usage.get("tokens"), "activity_run_id": activity_run_id}
-                if (reason := withdrawn()) is not None:
+                if (reason := withdrawn() or next(iter(stopped_because), None)) is not None:
                     finish_activity("completed" if succeeded else "failed")
                     return record("cancelled", reason, **extra)
+                category = classify_failure(answer, error_codes[-1] if error_codes else None).category
                 # Tag is stopping and took the coding agent with it: that isn't the routine's failure.
-                # A reply that did finish still posts.
-                interrupted = (not succeeded and not cancelled
+                # A reply that did finish still posts, and a rate-limited run still gets its retry.
+                retry_later = not succeeded and category == "rate_limit" and trigger != "retry"
+                interrupted = (not succeeded and not cancelled and not retry_later
                                and shutdown_requested.wait(ROUTINE_SHUTDOWN_GRACE_SECONDS))
                 finish_activity("interrupted" if interrupted else "completed" if succeeded else "failed")
                 if interrupted:
@@ -5569,7 +5574,6 @@ def create_app(
                 if cancelled and not limit_hit:
                     # Someone stopped it in Slack: not a failure, and nothing more to say.
                     return record("cancelled", "Stopped by someone in Slack.", **extra)
-                category = classify_failure(answer, error_codes[-1] if error_codes else None).category
                 # Limits come from error codes and only for runs that failed: a reply that
                 # merely talks about turns or budgets is still a reply.
                 if not succeeded and (limit_hit or "error_max_budget_usd" in error_codes):

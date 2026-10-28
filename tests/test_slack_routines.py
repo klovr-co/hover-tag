@@ -362,6 +362,35 @@ class RoutineRunTests(unittest.TestCase):
         self.assertEqual(record["outcome"], "cancelled")
         self.client.chat_postMessage.assert_not_called()
 
+    def test_a_routine_resumed_before_its_stopped_run_ends_keeps_the_pause_reason(self):
+        run = MagicMock()
+        stopped = threading.Event()
+        run.cancel.side_effect = stopped.set
+
+        def behaviour(kwargs):
+            self.definitions.set_enabled(self.routine["id"], False)
+            self.assertTrue(stopped.wait(1))
+            self.definitions.set_enabled(self.routine["id"], True)  # Resumed before the backend exits.
+            kwargs["on_cancelled"]()
+            return "Stopped.", False
+
+        with patch.object(slack_socket_agent, "ROUTINE_WITHDRAW_CHECK_SECONDS", 0.01), \
+                patch.object(slack_socket_agent, "active_run", return_value=run):
+            record = self.run_routine(behaviour)
+        self.assertEqual(record["outcome"], "cancelled")
+        self.assertIn("Paused while it ran", record["diagnostic"])
+        self.client.chat_postMessage.assert_not_called()
+
+    def test_a_rate_limited_run_still_gets_its_retry_when_tag_starts_stopping(self):
+        def behaviour(kwargs):
+            kwargs["on_error"]("rate_limit", "429 Too Many Requests")
+            self.fake_app.tag_shutdown_requested.set()
+            return "429 Too Many Requests", False
+
+        record = self.run_routine(behaviour)
+        self.assertEqual((record["outcome"], record.get("rate_limited")), ("failed", True))
+        self.client.chat_postMessage.assert_not_called()
+
     def test_a_run_stopped_by_a_person_is_cancelled_not_failed(self):
         # nanobot: test_run_history_records_job_cancellation.
         def behaviour(kwargs):
