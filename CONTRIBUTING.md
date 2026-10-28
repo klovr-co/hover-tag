@@ -18,8 +18,8 @@ checklist.
 
 ### Current line (most PRs)
 
-Branch from `main`, open the PR, and merge it when it is approved and CI
-passes.
+Branch from `main`, open the PR, and add the `queue` label when it is ready.
+Mergify merges it (see "Merging" below).
 
 ```bash
 git switch -c my-change origin/main
@@ -78,8 +78,8 @@ For example, a feature planned for 0.5 while `main` is 0.4:
    ```
 
 4. After the current line ships stable, a maintainer sets `VERSION` to the next
-   line (for example, `0.5.0-alpha`). Mark the PR ready for review and merge
-   it.
+   line (for example, `0.5.0-alpha`). Remove the `target:v0.5` label, mark the
+   PR ready for review, and queue it.
 
 We don't use feature flags to hide work for later versions.
 
@@ -87,7 +87,26 @@ We don't use feature flags to hide work for later versions.
 
 You usually don't need one. See "Pull request release behavior" in
 [AGENTS.md](AGENTS.md) and [RELEASE.md](RELEASE.md) for `release:skip`,
-`release:next-patch`, and `release:next-minor`.
+`release:next-patch`, and `release:next-minor`. Add a release label before you
+queue the PR.
+
+## Merging
+
+[Mergify](https://mergify.com) merges pull requests into `main` and
+`release/vX.Y.x`. Don't press GitHub's merge button. When a PR is ready, add the
+`queue` label or comment `@mergifyio queue`. Mergify then:
+
+1. Waits until every CI and clean-install check passes and no review requests
+   changes.
+2. Merges the base branch into the PR and waits for the checks again.
+3. Squash-merges the PR, one PR at a time, so prerelease numbers follow merge
+   order.
+
+Mergify doesn't queue a draft, a PR with a `target:vX.Y` label, or a PR with
+more than one `release:*` label. To take a PR out of the queue, remove the
+`queue` label or comment `@mergifyio dequeue`. The rules are in
+[`.mergify.yml`](.mergify.yml); keep its check list in step with the job names
+in `.github/workflows/ci.yml` and `install-smoke.yml`.
 
 Use public GitHub issues for ordinary bugs and features. Report suspected
 vulnerabilities through the private path in [SECURITY.md](SECURITY.md).
