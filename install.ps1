@@ -133,8 +133,13 @@ function Initialize-TagRuntime {
 $runtime = Initialize-TagRuntime
 $python, $uv = $runtime
 if ($RuntimeInfo) {
-    Write-Output $python
-    Write-Output $uv
+    # Windows PowerShell writes redirected output in the console code page,
+    # which garbles a non-ASCII TAG_HOME (C:\Users\Zoë\...). Write UTF-8 bytes;
+    # tag_dependencies.prepare_python reads them as UTF-8.
+    $bytes = (New-Object Text.UTF8Encoding $false).GetBytes("$python`n$uv`n")
+    $stdout = [Console]::OpenStandardOutput()
+    $stdout.Write($bytes, 0, $bytes.Length)
+    $stdout.Flush()
     exit 0
 }
 if ($DependenciesOnly) {

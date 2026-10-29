@@ -121,7 +121,7 @@ def prepare_python(source: Path, home: Path) -> tuple[Path, Path]:
     else:
         command = ["sh", str(source / "install.sh"), "--runtime-info"]
     result = subprocess.run(command, env=dict(os.environ, TAG_HOME=str(home)), stdout=subprocess.PIPE,
-                            text=True, check=False)
+                            encoding="utf-8", check=False)
     if result.returncode:
         raise RuntimeError("Tag runtime preparation failed; check the download error above and retry")
     python, uv = result.stdout.strip().splitlines()

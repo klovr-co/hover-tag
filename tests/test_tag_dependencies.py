@@ -171,6 +171,24 @@ class DependenciesTests(unittest.TestCase):
             self.assertEqual(rerun.call_args.args[0][0], 'managed')
             execv.assert_not_called()  # Windows execv would report success before the start finished
 
+    def test_runtime_info_paths_survive_a_non_ascii_tag_home(self):
+        # Windows PowerShell's console code page garbles non-ASCII paths, so
+        # install.ps1 writes UTF-8 bytes and prepare_python must decode UTF-8.
+        script = (ROOT / 'install.ps1').read_text(encoding='utf-8')
+        info = script[script.index('if ($RuntimeInfo) {'):script.index('if ($DependenciesOnly) {')]
+        self.assertIn('[Console]::OpenStandardOutput()', info)
+        self.assertNotIn('Write-Output', info)
+        home = Path('C:/Users/Zoë/AppData/Local/Tag')
+        def run(command, **options):
+            self.assertEqual(options.get('encoding'), 'utf-8')
+            self.assertNotIn('text', options)
+            return subprocess.CompletedProcess(command, 0, stdout=f'{home}/python.exe\n{home}/uv.exe\n')
+        with patch.object(dependencies.sys, 'platform', 'win32'), \
+                patch.object(dependencies.subprocess, 'run', side_effect=run):
+            python, uv = dependencies.prepare_python(ROOT, home)
+        self.assertEqual(python, home / 'python.exe')
+        self.assertEqual(uv, home / 'uv.exe')
+
     def test_migration_rechecks_slack_and_preserves_operator_environment(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'PATH': '/user/bin', 'SLACK_CONFIG_DIR': '/user/slack'}):
             home = Path(tmp)
