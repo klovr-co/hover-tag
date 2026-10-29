@@ -111,6 +111,19 @@ class DependenciesTests(unittest.TestCase):
                     download.assert_called_once()
                     self.assertEqual(auth.read_text(encoding="utf-8"), 'keep existing authorization')
 
+    def test_windows_on_arm_uses_the_emulated_x64_slack_cli(self):
+        # Slack ships no Windows ARM64 CLI; Windows 11 on ARM runs the x64 one.
+        self.assertEqual(dependencies.SLACK_ARTIFACTS[('win32', 'arm64')],
+                         dependencies.SLACK_ARTIFACTS[('win32', 'x86_64')])
+        with tempfile.TemporaryDirectory() as tmp, patch.object(dependencies.sys, 'platform', 'win32'), \
+                patch.object(dependencies.platform, 'machine', return_value='ARM64'), \
+                patch.object(dependencies.shutil, 'which', return_value=None), \
+                patch.object(dependencies, 'slack_compatible', side_effect=lambda c: Path(c).is_file()), \
+                patch.object(dependencies, 'download_verified', side_effect=lambda u, p, d: archive(p)) as download:
+            destination = dependencies.ensure_slack(Path(tmp))
+        self.assertEqual(destination.name, 'slack.exe')
+        self.assertIn('windows_64-bit', download.call_args.args[0])
+
     def test_integrity_failure_and_https_redirect_rejected(self):
         for url, digest, succeeds in [('https://example.com/cli', hashlib.sha256(b'payload').hexdigest(), True),
                                      ('https://example.com/cli', '0' * 64, False), ('http://example.com/cli', '0' * 64, False)]:
