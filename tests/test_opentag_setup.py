@@ -1043,6 +1043,16 @@ class GuidedSetupFlowTests(unittest.TestCase):
         values = opentag_setup.settings.load_config(self.config)
         self.assertEqual((values["SLACK_ENTERPRISE_ID"], values["SLACK_ALLOWED_USER_IDS"]), ("E0HOVER", "W01MAYA"))
 
+    def test_the_workspace_id_question_names_its_organization(self):
+        # Tag.app shows the ID field inside the organization's row, found by this ID.
+        replies = [*self.NEW_TAG[:2], answer("E0HOVER"), answer("manual"), answer("T0HOVERENG"), answer("create"), answer([])]
+        client = self.run_setup(replies)
+        asked = {q["id"]: q for q in client.questions()}
+        organization = {"id": "E0HOVER", "name": "Hover Sandbox"}
+        self.assertEqual(asked["org_workspace"]["organization"], organization)
+        self.assertEqual(asked["org_workspace_id"]["organization"], organization)
+        self.assertEqual(self.created, ["T0HOVERENG"])
+
     def test_back_from_the_recap_replays_earlier_answers_and_asks_the_workspace(self):
         replies = [*self.NEW_TAG[:3], {"back": True}, answer("T0KLOVR"), answer("create"), answer([])]
         with Client(replies) as client:

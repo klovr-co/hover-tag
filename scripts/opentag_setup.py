@@ -469,8 +469,9 @@ def choose_org_workspace(organization: dict[str, str | None]) -> slack_identity.
         return slack_identity.WorkspaceSelection(chosen["id"], chosen["name"], enterprise_id, org_name)
     error = None
     while True:
+        # Name the organization here too: Tag.app shows the ID field inside its row.
         team_id, error = parse_workspace_id(ask_text("Workspace address or ID (T…)", qid="org_workspace_id",
-                                                     error=error))
+                                                     error=error, organization={"id": enterprise_id, "name": org_name}))
         if team_id and not (error := settings.validation_error("SLACK_TEAM_ID", team_id)):
             return slack_identity.WorkspaceSelection(team_id, team_id, enterprise_id, org_name)
 
