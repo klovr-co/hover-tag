@@ -34,14 +34,46 @@ def slack_executable() -> str:
     return "slack.exe" if sys.platform == "win32" else "slack"
 
 
-def slack_compatible(command: str | Path) -> bool:
+def host_machine() -> str:
+    return {"aarch64": "arm64", "amd64": "x86_64"}.get(platform.machine().lower(), platform.machine().lower())
+
+
+def slack_run_options() -> dict:
+    """Options for every Slack CLI run whose output Tag captures.
+
+    On Windows on ARM, Slack's emulated x64 CLI hangs at startup, idle, when its
+    console has no terminal window, such as the one Tag.app's CREATE_NO_WINDOW
+    gives the CLI. With no console it finishes in about a second, and these runs
+    never need one. In a terminal window it runs normally, so interactive
+    sign-in keeps the operator's terminal.
+    """
+    if sys.platform == "win32" and host_machine() == "arm64":
+        return {"creationflags": subprocess.DETACHED_PROCESS}
+    return {}
+
+
+def slack_problem(command: str | Path) -> str | None:
+    """Why the Slack CLI at ``command`` is unusable, or None when it runs a supported 4.x."""
     try:
         result = subprocess.run([str(command), "version", "--skip-update", "--no-color"],
-                                capture_output=True, text=True, timeout=20, check=False)
-        match = re.search(r"\b(?:v)?(\d+)\.(\d+)\.(\d+)\b", result.stdout)
-        return result.returncode == 0 and bool(match) and (4, 7, 0) <= tuple(map(int, match.groups())) < (5, 0, 0)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+                                capture_output=True, text=True, timeout=20, check=False,
+                                stdin=subprocess.DEVNULL, **slack_run_options())
+    except subprocess.TimeoutExpired:
+        return "it did not finish `slack version` within 20 seconds"
+    except OSError as error:
+        return f"it could not start ({error.strerror or error})"
+    if result.returncode:
+        return f"`slack version` exited with code {result.returncode}"
+    match = re.search(r"\b(?:v)?(\d+)\.(\d+)\.(\d+)\b", result.stdout)
+    if not match:
+        return f"`slack version` printed no version: {result.stdout.strip()[:120]!r}"
+    if not (4, 7, 0) <= tuple(map(int, match.groups())) < (5, 0, 0):
+        return f"it is version {'.'.join(match.groups())}, not 4.7+ (4.x)"
+    return None
+
+
+def slack_compatible(command: str | Path) -> bool:
+    return slack_problem(command) is None
 
 
 def download_verified(url: str, destination: Path, digest: str) -> None:
@@ -65,8 +97,7 @@ def ensure_slack(home: Path) -> Path:
     existing = shutil.which("slack")
     if existing and slack_compatible(existing):
         return Path(existing).resolve()
-    machine = {"aarch64": "arm64", "amd64": "x86_64"}.get(platform.machine().lower(), platform.machine().lower())
-    target = SLACK_ARTIFACTS.get((sys.platform, machine))
+    target = SLACK_ARTIFACTS.get((sys.platform, host_machine()))
     if target is None:
         raise RuntimeError("Automatic Slack CLI setup is unavailable on this platform; install Slack CLI 4.7+ (4.x) and retry")
     name = slack_executable()
@@ -86,8 +117,9 @@ def ensure_slack(home: Path) -> Path:
         candidate = temporary / name
         extract_executable(archive, name, candidate)
         candidate.chmod(0o755)
-        if not slack_compatible(candidate):
-            raise RuntimeError("Downloaded Slack CLI cannot run on this machine; retry after checking OS compatibility")
+        if problem := slack_problem(candidate):
+            raise RuntimeError(f"Downloaded Slack CLI cannot run on this machine: {problem}. "
+                               "Retry after checking OS compatibility")
         publish(candidate, destination)
     return destination
 

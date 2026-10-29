@@ -15,8 +15,9 @@ try:
     import setup_ui as ui
     import tag_config as settings
     import slack_app_create
+    import tag_dependencies
 except ImportError:
-    from scripts import setup_ui as ui, tag_config as settings, slack_app_create
+    from scripts import setup_ui as ui, tag_config as settings, slack_app_create, tag_dependencies
 
 
 try:
@@ -74,6 +75,7 @@ def delete_slack_app(home: Path, backup: Path, app: dict, executable: str, *, so
                 [executable, "app", "delete", "--app", app["app_id"], "--team", app["team_id"],
                  "--force", "--skip-update", "--no-color"],
                 cwd=project, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90,
+                **tag_dependencies.slack_run_options(),
             )
         confirmed = result.returncode == 0
         record["status"] = "deleted" if confirmed else "unverified"
