@@ -158,7 +158,7 @@ def start_background(python: str | Path, script: str | Path, home: Path, environ
     shared.mkdir(parents=True, exist_ok=True, mode=0o700)
     options: dict = {}
     if os.name == "nt":
-        options["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        options["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         options["start_new_session"] = True
     # Marked first, so a status read right after this call already shows the download.

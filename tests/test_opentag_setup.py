@@ -13,7 +13,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import opentag_setup
+from scripts import opentag_setup, tag_dependencies
 from scripts.opentag_setup import (
     ask_required,
     main,
@@ -735,7 +735,8 @@ class WorkspaceAndOwnerTests(unittest.TestCase):
             {"id": "E0HOVER", "name": "Hover Sandbox", "kind": "organization", "user_id": "W01MAYA", "user_name": None},
         ])
 
-    def test_owner_comes_from_the_sign_in_then_auth_test_then_stops(self):
+    @patch.object(tag_dependencies, "slack_console_hosted", return_value=False)  # Windows on ARM: plain argv
+    def test_owner_comes_from_the_sign_in_then_auth_test_then_stops(self, _hosted):
         self.assertEqual(opentag_setup.signed_in_member("T0KLOVR", SIGN_INS), "U01MAYA")
         unknown = [{**SIGN_INS[0], "user_id": None}]
         auth = json.dumps({"ok": True, "team_id": "T0KLOVR", "user_id": "U02MAYA"})

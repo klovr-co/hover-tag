@@ -183,28 +183,40 @@ class DependenciesTests(unittest.TestCase):
                 else:
                     self.assertIn(reason, problem)
 
-    def test_slack_cli_runs_without_a_console_only_on_windows_on_arm(self):
-        # The emulated x64 CLI hangs, idle, in a console with no terminal window
-        # (as in Tag.app) and runs with no console at all.
-        with patch.object(dependencies.subprocess, 'DETACHED_PROCESS', 0x8, create=True):
-            for platform, machine, expected in [('win32', 'ARM64', {'creationflags': 0x8}),
-                                                ('win32', 'AMD64', {}), ('linux', 'aarch64', {}),
-                                                ('darwin', 'arm64', {})]:
-                with self.subTest(platform=platform, machine=machine), patch.object(dependencies.sys, 'platform', platform), \
-                        patch.object(dependencies.platform, 'machine', return_value=machine):
-                    self.assertEqual(dependencies.slack_run_options(), expected)
+    def test_slack_cli_runs_in_a_console_host_only_on_windows_on_arm(self):
+        # In a windowless console (as in Tag.app) the CLI waits forever for a terminal
+        # reply; with no console, each hook it runs opens a console window.
+        for platform, machine, expected in [('win32', 'ARM64', True), ('win32', 'AMD64', False),
+                                            ('linux', 'aarch64', False), ('darwin', 'arm64', False)]:
+            with self.subTest(platform=platform, machine=machine), patch.object(dependencies.sys, 'platform', platform),                     patch.object(dependencies.platform, 'machine', return_value=machine):
+                self.assertEqual(dependencies.slack_console_hosted(), expected)
 
-    def test_version_check_runs_detached_with_no_stdin_on_windows_on_arm(self):
-        with patch.object(dependencies, 'slack_run_options', return_value={'creationflags': 0x8}), \
-                patch.object(dependencies.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'v4.8.0', '')) as run:
+    def test_hosted_slack_cli_runs_windowless_through_the_base_interpreter(self):
+        done = subprocess.CompletedProcess([], 0, '', '')
+        with patch.object(dependencies, 'slack_console_hosted', return_value=True),                 patch.object(dependencies.subprocess, 'CREATE_NO_WINDOW', 0x08000000, create=True),                 patch.object(dependencies.sys, '_base_executable', '/base/python', create=True),                 patch.object(dependencies.subprocess, 'run', return_value=done) as run:
+            dependencies.run_slack([Path('/slack'), 'auth', 'list'], capture_output=True, timeout=30)
+        self.assertEqual(run.call_args.args[0],
+                         ['/base/python', '-I', str(ROOT / 'scripts/slack_console_host.py'), str(Path('/slack')), 'auth', 'list'])
+        self.assertEqual(run.call_args.kwargs, {'capture_output': True, 'timeout': 30, 'creationflags': 0x08000000})
+        with patch.object(dependencies, 'slack_console_hosted', return_value=False),                 patch.object(dependencies.subprocess, 'run', return_value=done) as run:
+            dependencies.run_slack(['/slack', 'version'], timeout=20)
+        self.assertEqual(run.call_args.args[0], ['/slack', 'version'])
+        self.assertEqual(run.call_args.kwargs, {'timeout': 20})
+
+    def test_version_check_runs_through_run_slack_with_no_stdin(self):
+        with patch.object(dependencies, 'run_slack', return_value=subprocess.CompletedProcess([], 0, 'v4.8.0', '')) as run:
             self.assertTrue(dependencies.slack_compatible('/slack'))
-        self.assertEqual(run.call_args.kwargs['creationflags'], 0x8)
+        self.assertEqual(run.call_args.args[0][1:], ['version', '--skip-update', '--no-color'])
         self.assertEqual(run.call_args.kwargs['stdin'], subprocess.DEVNULL)
 
-    def test_every_captured_slack_cli_call_uses_the_slack_run_options(self):
-        # Otherwise setup in Tag.app, upgrades and reset hang at the next Slack CLI call.
+    def test_every_captured_slack_cli_call_uses_run_slack(self):
+        # Otherwise setup in Tag.app, upgrades and reset hang at the next Slack CLI
+        # call on Windows on ARM, or the CLI's hooks open console windows.
         from scripts import opentag_setup, slack_app_create, slack_credentials, slack_manifest_migrations, tag_reset
         done = subprocess.CompletedProcess([], 0, 'Using slack.exe v4.8.0', '')
+        host = str(ROOT / 'scripts/slack_console_host.py')
+        hosted = (patch.object(dependencies, 'slack_console_hosted', return_value=True),
+                  patch.object(dependencies.subprocess, 'CREATE_NO_WINDOW', 0x08000000, create=True))
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             (project / '.slack').mkdir()
@@ -220,20 +232,29 @@ class DependenciesTests(unittest.TestCase):
                 'manifest sync': lambda: slack_manifest_migrations._run(['slack', 'manifest'], cwd=project),
             }
             for name, call in calls.items():
-                with self.subTest(call=name), patch.object(dependencies, 'slack_run_options', return_value={'creationflags': 0x8}), \
-                        patch.object(opentag_setup.ui, 'message'), patch('subprocess.run', return_value=done) as run:
+                with self.subTest(call=name), hosted[0], hosted[1],                         patch.object(opentag_setup.ui, 'message'), patch('subprocess.run', return_value=done) as run:
                     call()
                     self.assertTrue(run.called)
                     for invocation in run.call_args_list:
-                        self.assertEqual(invocation.kwargs.get('creationflags'), 0x8)
-            with patch.object(dependencies, 'slack_run_options', return_value={'creationflags': 0x8}), \
-                    patch.object(opentag_setup.ui, 'protocol_active', return_value=False), \
-                    patch('subprocess.run', return_value=done) as run:
+                        self.assertEqual(invocation.args[0][2], host)
+                        self.assertEqual(invocation.kwargs.get('creationflags'), 0x08000000)
+            with hosted[0], hosted[1], patch.object(opentag_setup.ui, 'protocol_active', return_value=False),                     patch('subprocess.run', return_value=done) as run:
                 opentag_setup.run_slack_cli(['auth', 'login'], interactive=True)
             # A terminal sign-in keeps the operator's console for Slack CLI prompts.
             self.assertNotIn('creationflags', run.call_args.kwargs)
+            self.assertNotIn(host, run.call_args.args[0])
         for module in (slack_credentials, tag_reset):
-            self.assertIn('tag_dependencies.slack_run_options()', Path(module.__file__).read_text(encoding='utf-8'))
+            self.assertIn('tag_dependencies.run_slack(', Path(module.__file__).read_text(encoding='utf-8'))
+
+    def test_background_processes_get_a_windowless_console_not_none(self):
+        # A process with no console (DETACHED_PROCESS) gives every console program it
+        # starts a new, visible console window: the venv's real Python, git, the CLIs.
+        offenders = [path.name for path in sorted((ROOT / 'scripts').glob('*.py'))
+                     if 'DETACHED_PROCESS' in path.read_text(encoding='utf-8')]
+        self.assertEqual(offenders, [])
+        for name in ('tag_cli', 'tag_autostart', 'tag_telemetry', 'tag_model_download', 'tag_install', 'model_catalog'):
+            with self.subTest(module=name):
+                self.assertIn('CREATE_NO_WINDOW', (ROOT / f'scripts/{name}.py').read_text(encoding='utf-8'))
 
     @unittest.skipIf(os.name == "nt", "POSIX runtime migration")
     def test_migration_failure_has_no_checkpoint_and_preserves_active_record(self):

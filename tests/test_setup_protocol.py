@@ -9,7 +9,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import opentag_setup, setup_ui
+from scripts import opentag_setup, setup_ui, tag_dependencies
 
 
 class ProtocolHarness:
@@ -135,7 +135,8 @@ class SetupProtocolTests(unittest.TestCase):
             {"type": "message", "text": "Bold"},
         ])
 
-    def test_slack_sign_in_relays_ticket_line_and_never_echoes_the_code(self):
+    @patch.object(tag_dependencies, "slack_console_hosted", return_value=False)  # Windows on ARM: plain argv
+    def test_slack_sign_in_relays_ticket_line_and_never_echoes_the_code(self, _hosted):
         started = subprocess.CompletedProcess([], 0, "Run this in Slack:\n/slackauthticket TICKET123\n", "")
         finished = subprocess.CompletedProcess([], 0, b"secret output", b"")
         with ProtocolHarness(["CODE9876"]) as client, patch.object(

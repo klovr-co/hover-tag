@@ -189,14 +189,13 @@ def run_slack_cli(arguments: list[str], *, cwd: Path | None = None, interactive:
             environment = dict(os.environ, SLACK_CLI_APP_ICON_PATH=str(icons[0]))
     if interactive and ui.protocol_active():
         # Keep Slack CLI's own prompts and output off the protocol stream.
-        return subprocess.run(command, cwd=cwd, env=environment, check=False,
-                              stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr,
-                              **tag_dependencies.slack_run_options()).returncode
+        return tag_dependencies.run_slack(command, cwd=cwd, env=environment, check=False,
+                                          stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr).returncode
     if interactive:
         return subprocess.run(command, cwd=cwd, env=environment, check=False).returncode
-    completed = subprocess.run(
+    completed = tag_dependencies.run_slack(
         command, cwd=cwd, env=environment, check=False, text=True, capture_output=True,
-        stdin=subprocess.DEVNULL, **tag_dependencies.slack_run_options(),
+        stdin=subprocess.DEVNULL,
     )
     output = safe_cli_output("\n".join(part for part in (completed.stdout, completed.stderr) if part).strip())
     if output and (not quiet or completed.returncode):
@@ -211,8 +210,8 @@ def remote_app_settings(project: Path, app_id: str) -> tuple[bool, str]:
         "--app", app_id, "--skip-update", "--no-color",
     ]
     try:
-        completed = subprocess.run(command, cwd=project, check=False, text=True, capture_output=True,
-                                   stdin=subprocess.DEVNULL, timeout=120, **tag_dependencies.slack_run_options())
+        completed = tag_dependencies.run_slack(command, cwd=project, check=False, text=True, capture_output=True,
+                                               stdin=subprocess.DEVNULL, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         return False, "Slack CLI did not respond."
     output = safe_cli_output(completed.stdout or "")
@@ -366,10 +365,9 @@ def authorized_workspaces(output: str) -> list[tuple[str, str]]:
 def list_slack_sign_ins() -> list[dict[str, str | None]]:
     """The Slack CLI's sign-ins on this computer; empty when none can be listed."""
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "auth", "list", "--skip-update", "--no-color"],
             check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30,
-            **tag_dependencies.slack_run_options(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -379,11 +377,10 @@ def list_slack_sign_ins() -> list[dict[str, str | None]]:
 def auth_test_member(team_id: str) -> str:
     """Ask Slack who is signed in, through the Slack CLI's own authorization."""
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "api", "auth.test", "--team", team_id,
              "--skip-update", "--no-color"],
             check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=15,
-            **tag_dependencies.slack_run_options(),
         )
         output = result.stdout + "\n" + result.stderr
         start, end = output.find("{"), output.rfind("}")
@@ -540,10 +537,9 @@ def slack_login_with_client() -> bool:
     ticket line, the operator sends it in Slack, and returns Slack's code."""
     slack = shutil.which("slack") or "slack"
     try:
-        started = subprocess.run(
+        started = tag_dependencies.run_slack(
             [slack, "auth", "login", "--no-prompt", "--skip-update", "--no-color"],
             check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60,
-            **tag_dependencies.slack_run_options(),
         )
     except (OSError, subprocess.TimeoutExpired):
         raise RuntimeError("Slack CLI could not start sign-in") from None
@@ -557,11 +553,10 @@ def slack_login_with_client() -> bool:
             ui.message("That doesn't look like the code Slack shows. Copy it again.")
             continue
         try:
-            finished = subprocess.run(
+            finished = tag_dependencies.run_slack(
                 [slack, "auth", "login", "--ticket", ticket, "--challenge", code.strip(),
                  "--skip-update", "--no-color"],
                 check=False, capture_output=True, stdin=subprocess.DEVNULL, timeout=60,
-                **tag_dependencies.slack_run_options(),
             )
         except (OSError, subprocess.TimeoutExpired):
             raise RuntimeError("Slack CLI could not finish sign-in") from None
@@ -674,10 +669,9 @@ def parse_local_path(value: str) -> Path | None:
 def slack_cli_supports_icon_upload() -> bool:
     """Require the first Slack CLI release with stable non-hosted app icons."""
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "version", "--skip-update", "--no-color"],
             check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=15,
-            **tag_dependencies.slack_run_options(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -1206,10 +1200,9 @@ def slack_cli_apps(project: Path, team_id: str) -> dict[str, str]:
     if not any((project / ".slack" / name).is_file() for name in ("apps.json", "apps.dev.json")):
         return {}
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "app", "list", "--team", team_id, "--skip-update", "--no-color"],
             cwd=project, check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30,
-            **tag_dependencies.slack_run_options(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return {}

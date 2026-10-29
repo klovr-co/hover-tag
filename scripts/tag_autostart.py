@@ -437,7 +437,7 @@ def _check(result: subprocess.CompletedProcess, action: str) -> None:
 
 
 def _spawn(command: list[str], installation_root: Path, log: Path) -> None:
-    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
                if os.name == "nt" else {"start_new_session": True})
     with log.open("ab") as output:
         subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=output,
@@ -607,7 +607,7 @@ def run(installation_root: Path, lifecycle, source_root: Path) -> int:
 
         def launch(label: str, arguments: list[str]) -> int:
             print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} starting {label}", flush=True)
-            # The supervisor has no console; don't let its children open one on Windows.
+            # Keep its children windowless on Windows, however the supervisor was started.
             hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
             try:
                 result = subprocess.run([*command, *arguments], stdin=subprocess.DEVNULL,
