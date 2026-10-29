@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -87,8 +88,24 @@ def ensure_slack(home: Path) -> Path:
         candidate.chmod(0o755)
         if not slack_compatible(candidate):
             raise RuntimeError("Downloaded Slack CLI cannot run on this machine; retry after checking OS compatibility")
-        os.replace(candidate, destination)
+        publish(candidate, destination)
     return destination
+
+
+def publish(candidate: Path, destination: Path, attempts: int = 20) -> None:
+    """Move a checked executable into place.
+
+    Windows keeps a just-run executable open for a moment (antivirus scans,
+    process teardown), so the move can fail with WinError 32. Retry briefly.
+    """
+    for attempt in range(attempts):
+        try:
+            os.replace(candidate, destination)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.25)
 
 
 def extract_executable(archive: Path, name: str, candidate: Path) -> None:
