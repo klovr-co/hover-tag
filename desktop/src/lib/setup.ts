@@ -30,6 +30,8 @@ export interface SetupState {
   existing: boolean;
   /** The last workspace list, so an organization opens inside it. */
   workspaces: SetupQuestion | null;
+  /** The organization being picked from, for its workspace ID question. */
+  organization: { id: string; name: string } | null;
   /** The last profile, so later steps show the Tag's name and picture. */
   profile: { name: string; preview: string | null; revision?: string | null } | null;
   /** Slack sign-in came from "Sign in to another workspace". */
@@ -42,7 +44,7 @@ export interface SetupState {
 
 export const initialSetup: SetupState = {
   question: null, lastQuestion: null, signInStep: 0, status: "Preparing setup…", outcome: null, error: "", tag: "", signIn: idleSignIn,
-  creating: null, ready: null, existing: false, workspaces: null, profile: null, addingWorkspace: false, ended: false,
+  creating: null, ready: null, existing: false, workspaces: null, organization: null, profile: null, addingWorkspace: false, ended: false,
   checkingCode: false,
 };
 
@@ -88,12 +90,17 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
         return { ...state, signIn: signInReducer(state.signIn, { type: "line", line: action.line }) };
       }
       if (event.type === "question") {
-        const question = event as SetupQuestion;
+        const asked = event as SetupQuestion;
+        // Older setups left the organization off its workspace ID question,
+        // so the ID field had no row to open in. Keep the one just picked.
+        const question = asked.id === "org_workspace_id" && !asked.organization && state.organization
+          ? { ...asked, organization: state.organization } : asked;
+        const organization = question.id === "workspace" ? null : question.organization ?? state.organization;
         const existing = state.existing || EXISTING_QUESTIONS.has(question.id);
         const workspaces = question.id === "workspace" ? question : state.workspaces;
         const profile = question.id === "profile" ? { name: question.name ?? "", preview: question.preview ?? null,
           revision: question.preview_revision ?? question.picture_label } : state.profile;
-        const base = { ...state, lastQuestion: question.id, existing, workspaces, profile, creating: null, checkingCode: false };
+        const base = { ...state, lastQuestion: question.id, existing, workspaces, organization, profile, creating: null, checkingCode: false };
         if (question.kind === "slack_login") {
           // Asked again: Slack refused the code, so stay on the code step.
           const again = state.question?.kind === "slack_login";
