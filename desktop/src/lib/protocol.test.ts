@@ -13,7 +13,8 @@ import {
   type VersionInfo,
 } from "./protocol";
 import { collapseRepeats } from "./protocol";
-import { explainExit, initialSetup, setupReducer, trackStep } from "./setup";
+import { CODE_REFUSED, explainExit, initialSetup, setupReducer, trackStep } from "./setup";
+import { signInMotion } from "../components/Connect";
 import { droppedTags, failureLine } from "./tags";
 import { workingFolder } from "../components/Home";
 import { modelText, quietLine, rowLine, type ActivityItem } from "./home";
@@ -112,6 +113,31 @@ describe("setup", () => {
     state = setupReducer(state, { type: "line", line: login });
     expect(state.signInStep).toBe(2);
     expect(state.error).toMatch(/didn't accept/);
+  });
+
+  it("starts the sign-in steps over with a new sign-in line", () => {
+    const ask = (line: string) => JSON.stringify({ type: "question", id: "slack_login", kind: "slack_login", prompt: "Sign in to Slack",
+      sign_in_line: line, new_ticket: "new_ticket", can_go_back: true });
+    let state = setupReducer(initialSetup, { type: "line", line: ask("/slackauthticket OLD") });
+    state = setupReducer(state, { type: "signIn", step: 2 });
+    state = setupReducer(state, { type: "answered" });
+    state = setupReducer(state, { type: "line", line: ask("/slackauthticket OLD") });
+    expect(state.error).toBe(CODE_REFUSED);
+    expect(state.error).toMatch(/expired/);
+    state = setupReducer(state, { type: "newLine" });
+    expect(state).toMatchObject({ renewingLine: true, error: "" });
+    state = setupReducer(state, { type: "line", line: ask("/slackauthticket NEW") });
+    expect(state).toMatchObject({ signInStep: 0, error: "", renewingLine: false, checkingCode: false });
+    expect(state.question?.sign_in_line).toBe("/slackauthticket NEW");
+  });
+
+  it("restarts the sign-in steps with motion only for a new line, and shakes only for a refused code", () => {
+    const at = (signInStep: 0 | 1 | 2, error = "") => ({ ...initialSetup, signInStep, error });
+    expect(signInMotion(at(0), true, true)).toEqual({ renewed: true, refused: false });
+    expect(signInMotion(at(0), false, false)).toEqual({ renewed: false, refused: false });
+    expect(signInMotion(at(2, CODE_REFUSED), false, true)).toEqual({ renewed: false, refused: true });
+    expect(signInMotion(at(2, CODE_REFUSED), false, false)).toEqual({ renewed: false, refused: false });
+    expect(signInMotion(at(2, "other"), false, true)).toEqual({ renewed: false, refused: false });
   });
 
   it("checks a sign-in code until Slack answers, so it is sent only once", () => {

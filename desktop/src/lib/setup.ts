@@ -38,12 +38,18 @@ export interface SetupState {
   ended: boolean;
   /** A Slack sign-in code was sent and Slack hasn't answered yet: send it only once. */
   checkingCode: boolean;
+  /** A new Slack sign-in line was asked for and hasn't arrived yet. */
+  renewingLine: boolean;
 }
+
+/** Answers the Slack sign-in question by asking for a new sign-in line; lines expire. */
+export const NEW_SIGN_IN_LINE = "new_ticket";
+export const CODE_REFUSED = "Slack didn't accept that code. If Slack showed an error instead of a code, the sign-in line expired. Get a new one below.";
 
 export const initialSetup: SetupState = {
   question: null, lastQuestion: null, signInStep: 0, status: "Preparing setup…", outcome: null, error: "", tag: "", signIn: idleSignIn,
   creating: null, ready: null, existing: false, workspaces: null, profile: null, addingWorkspace: false, ended: false,
-  checkingCode: false,
+  checkingCode: false, renewingLine: false,
 };
 
 export type SetupAction =
@@ -56,6 +62,8 @@ export type SetupAction =
   /** The AI step answered with a sign-in: keep the question up and show progress. */
   | { type: "agentSignIn"; backend: string }
   | { type: "signIn"; step: SignInStep }
+  /** Asked Slack for a new sign-in line; the old one may have expired. */
+  | { type: "newLine" }
   | { type: "existing" }
   | { type: "addWorkspace" }
   | { type: "error"; message: string };
@@ -93,14 +101,12 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
         const workspaces = question.id === "workspace" ? question : state.workspaces;
         const profile = question.id === "profile" ? { name: question.name ?? "", preview: question.preview ?? null,
           revision: question.preview_revision ?? question.picture_label } : state.profile;
-        const base = { ...state, lastQuestion: question.id, existing, workspaces, profile, creating: null, checkingCode: false };
+        const base = { ...state, lastQuestion: question.id, existing, workspaces, profile, creating: null, checkingCode: false, renewingLine: false };
         if (question.kind === "slack_login") {
-          // Asked again: Slack refused the code, so stay on the code step.
-          const again = state.question?.kind === "slack_login";
-          return {
-            ...base, question, signInStep: again ? 2 : 0,
-            error: again ? "Slack didn't accept that code. Check it and try again." : "",
-          };
+          // Asked again with the same line: Slack refused the code, so stay on the code step.
+          // A new line starts the steps over.
+          const again = state.question?.kind === "slack_login" && state.question.sign_in_line === question.sign_in_line;
+          return { ...base, question, signInStep: again ? 2 : 0, error: again ? CODE_REFUSED : "" };
         }
         // A sign-in ends when the AI step is asked again; keep its outcome on screen.
         const signIn = state.signIn.step ? { ...state.signIn, step: null } : state.signIn;
@@ -131,6 +137,8 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
       return state.profile ? { ...state, profile: { ...state.profile, name: action.name } } : state;
     case "agentSignIn":
       return { ...state, signIn: signInReducer(idleSignIn, { type: "start", backend: action.backend }), error: "" };
+    case "newLine":
+      return { ...state, renewingLine: true, error: "" };
     case "signIn":
       return { ...state, signInStep: action.step, error: action.step === 2 ? state.error : "" };
     case "existing":

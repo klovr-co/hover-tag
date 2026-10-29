@@ -431,3 +431,32 @@ it("sends a Slack sign-in code once while Slack checks it", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Connect" }));
   expect(send).toHaveBeenCalledTimes(2);
 });
+
+it("gets a new Slack sign-in line and starts the steps over", async () => {
+  const api = demoBridge();
+  let emit!: (line: string) => void;
+  const send = vi.fn();
+  api.setup = async (_args, onLine) => { emit = onLine; return { send, stop: vi.fn() }; };
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+  const ask = (line: string) => JSON.stringify({ type: "question", id: "slack_login", kind: "slack_login", prompt: "Sign in to Slack",
+    sign_in_line: line, new_ticket: "new_ticket", can_go_back: false });
+  act(() => emit(ask("/slackauthticket OLD111")));
+  expect(screen.getByText(/Sign-in lines expire/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+  fireEvent.click(screen.getByRole("button", { name: "I clicked Confirm" }));
+  fireEvent.change(screen.getByLabelText("Code from Slack"), { target: { value: "OLDCODE1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Get a new sign-in line" }));
+  expect(send).toHaveBeenCalledWith({ answer: "new_ticket" });
+  // Only once while Slack makes the new line.
+  expect((screen.getByRole("button", { name: /Getting a new line/ }) as HTMLButtonElement).disabled).toBe(true);
+  act(() => emit(ask("/slackauthticket NEW222")));
+  expect(screen.getByText("/slackauthticket NEW222")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
+  expect(screen.queryByLabelText("Code from Slack")).toBeNull();
+  // The old code doesn't come back with the new line.
+  fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+  fireEvent.click(screen.getByRole("button", { name: "I clicked Confirm" }));
+  expect((screen.getByLabelText("Code from Slack") as HTMLInputElement).value).toBe("");
+  expect(send).toHaveBeenCalledTimes(1);
+});
