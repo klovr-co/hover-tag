@@ -14,8 +14,9 @@ try:
     import slack_identity
     import slack_app_create
     import tag_config as settings
+    import tag_dependencies
 except ImportError:
-    from scripts import slack_identity, slack_app_create, tag_config as settings
+    from scripts import slack_identity, slack_app_create, tag_config as settings, tag_dependencies
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -97,7 +98,7 @@ def receive(project: Path, team_id: str, app_id: str, *, enterprise_id: str = ""
                 [slack, "deploy", "--team", authorization_id, "--app", app_id, *grant,
                  "--hide-triggers", "--skip-update", "--no-color"],
                 cwd=handoff, env=environment, input="", capture_output=True, text=True,
-                check=False, timeout=120,
+                check=False, timeout=120, **tag_dependencies.slack_run_options(),
             )
         except (OSError, subprocess.TimeoutExpired):
             raise RuntimeError("Slack CLI could not complete the connection. Check authorization and try again.") from None

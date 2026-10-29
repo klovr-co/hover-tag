@@ -24,9 +24,10 @@ try:
     import slack_credentials
     import tag_config as settings
     import tag_credentials
+    import tag_dependencies
 except ImportError:
     from scripts import slack_identity, slack_channels, slack_app_create, slack_credentials, tag_config as settings
-    from scripts import tag_credentials
+    from scripts import tag_credentials, tag_dependencies
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,6 +140,7 @@ def _run(command: list[str], *, cwd: Path, capture: bool = True) -> subprocess.C
             capture_output=capture,
             stdin=subprocess.DEVNULL,
             timeout=120,
+            **tag_dependencies.slack_run_options(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("Slack CLI did not complete; check its installation and retry") from exc
