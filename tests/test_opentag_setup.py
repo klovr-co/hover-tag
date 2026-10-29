@@ -1061,6 +1061,44 @@ class GuidedSetupFlowTests(unittest.TestCase):
         self.assertEqual(client.questions()[4]["default"], 0)
         self.assertEqual(opentag_setup.settings.load_config(self.config)["SLACK_ALLOWED_USER_IDS"], "U01MAYA")
 
+    def test_back_in_an_organization_after_signing_in_stays_at_the_workspace(self):
+        # Signing in to Slack ends Back's history, as slack_login_with_client does.
+        def signed_in():
+            opentag_setup.ui.commit()
+            return SIGN_INS
+        replies = [*self.NEW_TAG[:2], answer("E0HOVER"), {"back": True},
+                   answer("E0HOVER"), answer("manual"), answer("T0HOVERENG"), answer("create"), answer([])]
+        with patch.object(opentag_setup, "list_slack_sign_ins", side_effect=signed_in), Client(replies) as client:
+            with self.assertRaises(opentag_setup.ui.GoBack) as raised:
+                opentag_setup.guided_setup(self.config, start_services=False)
+            self.assertEqual(raised.exception.replay, [])
+            values = opentag_setup.settings.load_config(self.config)
+            opentag_setup.settings.save_config(self.config, {
+                key: value for key, value in values.items() if key not in opentag_setup.BACK_CLEARS["workspace"]})
+            opentag_setup.ui.start_replay(raised.exception.replay, raised.exception.target)
+            self.assertEqual(opentag_setup.guided_setup(self.config, start_services=False), 0)
+        ids = [q["id"] for q in client.questions()]
+        # Not back to Your Tag: the name was saved before signing in.
+        self.assertEqual(ids, ["profile", "default_model", "workspace", "org_workspace", "workspace",
+                               "org_workspace", "org_workspace_id", "approve_setup", "channels"])
+        self.assertEqual(client.questions()[4]["default"], 1)
+        self.assertEqual(self.created, ["T0HOVERENG"])
+        values = opentag_setup.settings.load_config(self.config)
+        self.assertEqual((values["OPENTAG_BOT_NAME"], values["SLACK_TEAM_ID"]), ("Maya's Tag", "T0HOVERENG"))
+
+    def test_back_to_your_tag_after_signing_in_still_asks_for_the_name(self):
+        def signed_in():
+            opentag_setup.ui.commit()
+            return SIGN_INS
+        with patch.object(opentag_setup, "list_slack_sign_ins", side_effect=signed_in), \
+                Client([*self.NEW_TAG[:2]]) as client:
+            with self.assertRaises(opentag_setup.ui.Paused):
+                opentag_setup.guided_setup(self.config, start_services=False)
+            opentag_setup.ui.start_replay([], ("profile", {"name": "Maya's Tag", "description": ""}))
+            with self.assertRaises(opentag_setup.ui.Paused):
+                opentag_setup.guided_setup(self.config, start_services=False)
+        self.assertEqual([q["id"] for q in client.questions()], ["profile", "default_model", "workspace", "profile"])
+
     def test_owner_unknown_stops_without_guessing(self):
         unknown = [{**SIGN_INS[0], "user_id": None}]
         with patch.object(opentag_setup, "list_slack_sign_ins", return_value=unknown), patch.object(
