@@ -24,6 +24,9 @@ SLACK_ARTIFACTS = {
     ("linux", "x86_64"): ("linux_amd64", "533ebc242561a79c6aaf238c3417ce113d1257ace80cf90f1e5f852d8ec9ca7b"),
     ("win32", "x86_64"): ("windows_64-bit", "ccf7ac1fcdbf39cdbd66cbc04d3018c5c293b70e489a85e07b140693377c6d24"),
 }
+# Slack publishes no Windows ARM64 build; Windows 11 on ARM runs the x64 one
+# under emulation, and ensure_slack still checks that it actually runs.
+SLACK_ARTIFACTS[("win32", "arm64")] = SLACK_ARTIFACTS[("win32", "x86_64")]
 
 
 def slack_executable() -> str:
