@@ -655,7 +655,10 @@ that are not JSON objects.
 
 `slack_login` (id `slack_login`) replaces the terminal's Slack CLI sign-in. Its `sign_in_line` is a
 one-time `/slackauthticket` command for the person to send in Slack; answer with
-the code Slack then shows. Setup never echoes the code. `tag add --json` never asks
+the code Slack then shows. Sign-in lines expire after a few minutes; answer `"new_ticket"` (the
+question's `new_ticket` value) to get a new one, and setup asks again with it. Setup never echoes the code.
+In a terminal, the Slack CLI's own sign-in runs instead, and if it doesn't finish, setup offers a new
+sign-in line (`slack_new_sign_in_line`) rather than stopping. `tag add --json` never asks
 for the Tag's ID; its result reports the ID once setup has named it.
 
 #### One question per command
