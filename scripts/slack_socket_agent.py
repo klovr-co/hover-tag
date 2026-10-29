@@ -70,11 +70,14 @@ try:
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
     from .agent_activity import THINKING_LABEL, show_thinking
-    from .tag_paths import instance_home, tag_temp_dir
+    from .tag_paths import instance_home, owns_workspace, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
     from . import slack_channels
     from . import tag_memory
     from . import tag_handoff
+    from . import tag_lead
+    from . import tag_personas
+    from . import tag_persona_proposals
     from . import tag_routines
     from .tag_routine_scheduler import RoutineScheduler
 except ImportError:  # Direct script execution does not create a package context.
@@ -116,10 +119,13 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_labels import activity_title_for_status, readable_activity_title
     from agent_activity import THINKING_LABEL, show_thinking
     from record_output_artifact import channel_artifact_directory
-    from tag_paths import instance_home, tag_temp_dir
+    from tag_paths import instance_home, owns_workspace, tag_temp_dir
     import slack_channels
     import tag_memory
     import tag_handoff
+    import tag_lead
+    import tag_personas
+    import tag_persona_proposals
     import tag_routines
     from tag_routine_scheduler import RoutineScheduler
 
@@ -178,6 +184,11 @@ APPROVAL_APPROVE_ACTION_ID = "opentag_approval_approve"
 APPROVAL_DENY_ACTION_ID = "opentag_approval_deny"
 APPROVAL_CHOICE_ACTION_PREFIX = "opentag_approval_choice_"
 APPROVAL_MORE_ACTION_ID = "opentag_approval_more"
+PERSONA_PROPOSAL_APPROVE_ACTION_ID = "opentag_persona_proposal_approve"
+PERSONA_PROPOSAL_REJECT_ACTION_ID = "opentag_persona_proposal_reject"
+TAG_CREATE_APPROVE_ACTION_ID = "opentag_tag_create_approve"
+TAG_CREATE_REJECT_ACTION_ID = "opentag_tag_create_reject"
+TAG_CREATE_CHECK_ACTION_ID = "opentag_tag_create_check"
 WAITING_QUEUE_ACTION_ID = "opentag_waiting_queue"
 WAITING_STEER_ACTION_ID = "opentag_waiting_steer"
 REPORT_ISSUE_ACTION_ID = "opentag_report_issue"
@@ -926,14 +937,16 @@ def skip_oversized_earlier_files(
 
 def build_thread_text(
     client: Any, channel: str, thread_ts: str, attachment_dir: Path,
-    *, request: dict[str, Any] | None = None,
+    *, request: dict[str, Any] | None = None, persona_of: Callable[[str], str | None] | None = None,
 ) -> str:
-    return build_thread_texts(client, channel, thread_ts, attachment_dir, request=request)[0]
+    return build_thread_texts(client, channel, thread_ts, attachment_dir, request=request,
+                              persona_of=persona_of)[0]
 
 
 def build_thread_texts(
     client: Any, channel: str, thread_ts: str, attachment_dir: Path,
     *, request: dict[str, Any] | None = None, since_ts: str | None = None, own_user: str | None = None,
+    persona_of: Callable[[str], str | None] | None = None,
 ) -> tuple[str, str]:
     """The thread excerpt, and only what was posted after ``since_ts`` by others.
 
@@ -983,6 +996,9 @@ def build_thread_texts(
     since = float(since_ts) if since_ts else None
     for message in messages[-30:]:
         user = message.get("user") or message.get("bot_id") or "unknown"
+        # Every persona shares one bot user, so name the persona that posted (ADR 0012).
+        if persona_of is not None and message.get("bot_id") and (persona := persona_of(str(message.get("ts", "")))):
+            user = f"{user} as {persona}"
         text = message.get("text", "")
         message_lines = [f"{user}: {text}", *format_message_attachments(message)]
         for file in message_files(message):
@@ -2511,6 +2527,8 @@ def run_backend(
     memory_receipts: Path | None = None,
     handoff_requests: Path | None = None,
     handoff_depth: int = 0,
+    persona_file: Path | None = None,
+    persona_scopes: str | None = None,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -2569,6 +2587,8 @@ def run_backend(
             memory_receipts=str(memory_receipts) if memory_receipts else None,
             handoff_requests=str(handoff_requests) if handoff_requests else None,
             handoff_depth=handoff_depth,
+            persona_file=str(persona_file) if persona_file else None,
+            persona_scopes=persona_scopes,
         )
         result = subprocess.run(
             cmd,
@@ -2626,6 +2646,8 @@ def run_backend_events(
     memory_receipts: Path | None = None,
     handoff_requests: Path | None = None,
     handoff_depth: int = 0,
+    persona_file: Path | None = None,
+    persona_scopes: str | None = None,
     resume_session: str | None = None,
     on_session: Callable[[str], None] | None = None,
     thread_new_text: str | None = None,
@@ -2717,6 +2739,8 @@ def run_backend_events(
         memory_receipts=str(memory_receipts) if memory_receipts else None,
         handoff_requests=str(handoff_requests) if handoff_requests else None,
         handoff_depth=handoff_depth,
+        persona_file=str(persona_file) if persona_file else None,
+        persona_scopes=persona_scopes,
         run_limits=run_limits,
         routine_id=routine_id,
     )
@@ -2904,7 +2928,14 @@ def post_final_reply(
     answer: str,
     placeholder_ts: str | None = None,
     footer_blocks: list[dict[str, Any]] | None = None,
-) -> None:
+    identity: dict[str, str] | None = None,
+) -> str | None:
+    """Post the reply and return its first message's ``ts``.
+
+    ``identity`` (``username`` and ``icon_url``) posts as a persona. ``chat.update``
+    can't change who a message is from, so a persona's reply replaces the
+    placeholder with a new message instead of editing it.
+    """
     chunks = split_reply(to_mrkdwn(answer), max_chars=2_900 if footer_blocks else MAX_REPLY_CHARS)
 
     def blocks_with_accessory(text: str) -> list[dict[str, Any]]:
@@ -2921,10 +2952,16 @@ def post_final_reply(
             return [section]
         return [section, *(footer_blocks or [])]
 
+    if placeholder_ts is not None and identity:
+        try:
+            client.chat_delete(channel=channel, ts=placeholder_ts)
+        except Exception:  # noqa: BLE001 - the reply still posts; the placeholder stays
+            pass
+        placeholder_ts = None
+    first_blocks = None
+    if footer_blocks and len(chunks) == 1:
+        first_blocks = blocks_with_accessory(chunks[0])
     if placeholder_ts is not None:
-        first_blocks = None
-        if footer_blocks and len(chunks) == 1:
-            first_blocks = blocks_with_accessory(chunks[0])
         client.chat_update(
             channel=channel,
             ts=placeholder_ts,
@@ -2932,17 +2969,17 @@ def post_final_reply(
             mrkdwn=True,
             blocks=first_blocks,
         )
+        first_ts: str | None = placeholder_ts
     else:
-        first_blocks = None
-        if footer_blocks and len(chunks) == 1:
-            first_blocks = blocks_with_accessory(chunks[0])
-        client.chat_postMessage(
+        posted = client.chat_postMessage(
             channel=channel,
             thread_ts=thread_ts,
             text=chunks[0],
             mrkdwn=True,
             blocks=first_blocks,
+            **(identity or {}),
         )
+        first_ts = posted.get("ts") if hasattr(posted, "get") else None
     for index, chunk in enumerate(chunks[1:], start=1):
         blocks = None
         if footer_blocks and index == len(chunks) - 1:
@@ -2953,7 +2990,27 @@ def post_final_reply(
             text=chunk,
             mrkdwn=True,
             blocks=blocks,
+            **(identity or {}),
         )
+    return first_ts
+
+
+def slack_customize_granted(client: Any) -> bool:
+    """Whether this app may post under a persona's name and picture (``chat:write.customize``)."""
+    try:
+        response = client.auth_test()
+    except Exception:  # noqa: BLE001 - without an answer, post as the app
+        return False
+    headers = getattr(response, "headers", None) or {}
+    scopes = next((value for key, value in headers.items() if str(key).lower() == "x-oauth-scopes"), "")
+    return "chat:write.customize" in {item.strip() for item in str(scopes).split(",")}
+
+
+def persona_reply(client: Any, persona: tag_personas.Persona, answer: str) -> tuple[str, dict[str, str] | None]:
+    """The reply text and identity for a persona; without the scope, the app posts with the name first."""
+    if slack_customize_granted(client):
+        return answer, persona.message_fields()
+    return f"*{persona.name}:* {answer}", None
 
 
 def post_private_failure(
@@ -3490,9 +3547,14 @@ def post_backend_approval(
     user_id: str,
     approval: dict[str, Any],
     backend: str = "codex",
+    identity: dict[str, str] | None = None,
 ) -> Any:
-    """Show an approval only to its requester, except in an already-private DM."""
+    """Show an approval only to its requester, except in an already-private DM.
+
+    ``identity`` shows the persona that asks (ADR 0012); the requester check is unchanged.
+    """
     message = {
+        **(identity or {}),
         "channel": channel,
         "thread_ts": thread_ts,
         "text": f"{backend_display_name(backend)} needs your approval to continue.",
@@ -3692,6 +3754,75 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     print("=" * 64)
 
 
+def publish_roster_card(client: Any) -> None:
+    """Publish this Tag's public card, so Lead can route to it and it can escalate."""
+    root, own = os.getenv("TAG_HOME", ""), os.getenv("TAG_ID", "")
+    if not root or not own:
+        return
+    try:
+        from .slack_channel_names import read as read_channel_names
+    except ImportError:
+        from slack_channel_names import read as read_channel_names
+    identity = client.auth_test()
+    team = os.getenv("SLACK_TEAM_ID", "") or str(identity.get("team_id") or "")
+    try:
+        names = read_channel_names(instance_home(), team)
+    except (OSError, ValueError):
+        names = {}
+    ids = [item.strip() for item in os.getenv("SLACK_CHANNEL_IDS", "").split(",") if item.strip()]
+    tag_lead.save_card(
+        Path(root), own, user_id=str(identity.get("user_id") or ""), team=team,
+        name=os.getenv("OPENTAG_BOT_NAME", "") or "Tag", description=os.getenv("OPENTAG_BOT_DESCRIPTION", ""),
+        channels=[{"id": channel, "name": names.get(channel)} for channel in dict.fromkeys(ids)],
+        model=os.getenv("OPENTAG_DEFAULT_MODEL", ""),
+    )
+
+
+def tag_proposal_blocks(record: dict[str, Any], status: str | None = None) -> list[dict[str, Any]]:
+    """The approval card for a proposed Tag; ``status`` replaces the buttons once it is decided."""
+    blocks: list[dict[str, Any]] = [{"type": "section", "text": {"type": "mrkdwn",
+                                     "text": tag_lead.approval_text(record)[:2900]}}]
+    if status is not None:
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": status[:2900]}]})
+        return blocks
+    value = json.dumps({"proposal": record["id"]})
+    blocks.append({"type": "actions", "elements": [
+        {"type": "button", "action_id": TAG_CREATE_APPROVE_ACTION_ID, "style": "primary",
+         "text": {"type": "plain_text", "text": "Approve"}, "value": value,
+         "confirm": {"title": {"type": "plain_text", "text": "Create this Tag?"},
+                     "text": {"type": "mrkdwn", "text": f"Tag creates a Slack app named *{record['proposal']['name']}*."},
+                     "confirm": {"type": "plain_text", "text": "Create"},
+                     "deny": {"type": "plain_text", "text": "Cancel"}}},
+        {"type": "button", "action_id": TAG_CREATE_REJECT_ACTION_ID, "style": "danger",
+         "text": {"type": "plain_text", "text": "Reject"}, "value": value},
+    ]})
+    return blocks
+
+
+def persona_proposal_blocks(record: dict[str, Any], tag_name: str, status: str | None = None) -> list[dict[str, Any]]:
+    """The approval card for a proposed persona or skill; ``status`` replaces the buttons once decided."""
+    blocks: list[dict[str, Any]] = [{"type": "section", "text": {"type": "mrkdwn", "text": (
+        tag_persona_proposals.approval_text(record, tag_name=tag_name)[:2900])}}]
+    if status is not None:
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": status[:2900]}]})
+        return blocks
+    value = json.dumps({"proposal": record["id"]})
+    blocks.append({"type": "actions", "elements": [
+        {"type": "button", "action_id": PERSONA_PROPOSAL_APPROVE_ACTION_ID, "style": "primary",
+         "text": {"type": "plain_text", "text": "Approve"}, "value": value},
+        {"type": "button", "action_id": PERSONA_PROPOSAL_REJECT_ACTION_ID,
+         "text": {"type": "plain_text", "text": "Reject"}, "value": value},
+    ]})
+    return blocks
+
+
+def tag_creation_step_blocks(record: dict[str, Any], text: str) -> list[dict[str, Any]]:
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": text[:2900]}},
+            {"type": "actions", "elements": [{"type": "button", "action_id": TAG_CREATE_CHECK_ACTION_ID,
+                                              "text": {"type": "plain_text", "text": "Check again"},
+                                              "value": json.dumps({"proposal": record["id"]})}]}]
+
+
 def create_app(
     backend: str,
     timeout: int,
@@ -3703,6 +3834,7 @@ def create_app(
     activity_store: ActivityStore | None = None,
     peers: list[tag_handoff.Peer] | None = None,
     handoff_store: tag_handoff.HandoffStore | None = None,
+    lead: tag_lead.LeadBridge | None = None,
     allowed_bot_ids: frozenset[str] | None = None,
 ) -> App:
     retire_slack_settings()
@@ -3748,12 +3880,24 @@ def create_app(
             peers = tag_handoff.parse_peers(os.getenv("OPENTAG_PEER_TAGS", ""))
         except ValueError as exc:
             raise RuntimeError(f"OPENTAG_PEER_TAGS is invalid: {exc}") from None
-    # Other Tags whose bot messages this Tag accepts; everything else from bots is ignored.
-    peer_ids = frozenset(peer.user_id for peer in peers)
+    lead = lead if lead is not None else tag_lead.LeadBridge.from_environment()
+
+    def current_peers() -> list[tag_handoff.Peer]:
+        """Configured peers, plus the installation's Tags: every lane for Lead, else Lead."""
+        found = list(peers)
+        if lead is not None:
+            cards = lead.lanes() if lead.is_lead() else [card for card in [lead.lead_card()] if card]
+            known = {peer.user_id for peer in found}
+            found += [tag_handoff.Peer(card.name, card.user_id) for card in cards if card.user_id not in known]
+        return found
+
+    def current_peer_ids() -> frozenset[str]:
+        # Other Tags whose bot messages this Tag accepts; everything else from bots is ignored.
+        return frozenset(peer.user_id for peer in current_peers())
     # Live-test automation only: Slack apps whose posts carry their user's identity. Empty by default.
     test_app_ids = frozenset(app_id.strip() for app_id in os.getenv("OPENTAG_TEST_APP_IDS", "").split(",")
                              if app_id.strip())
-    handoff_store =handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
+    handoff_store = handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
     # A restart can end a combine run before it finishes; the next deadline scan picks it up again.
     handoff_store.requeue_combining()
     handled_peer_requests: set[tuple[str, str]] = set()
@@ -4539,7 +4683,12 @@ def create_app(
         client: Any, logger: Any, team: str, channel: str, thread_ts: str,
         requester: str, question: str, request: dict[str, Any],
     ) -> None:
-        targets = [target for target in request["targets"] if target.get("user_id") in peer_ids]
+        targets = [target for target in request["targets"] if target.get("user_id") in current_peer_ids()]
+        if lead is not None and lead.is_lead():
+            targets = []  # Lead routes to one owner; it never collects answers.
+        elif lead is not None and (escalation := lead.lead_card()) is not None:
+            # With a Lead, asking is escalation only: one judgment call, to Lead.
+            targets = [target for target in targets if target.get("user_id") == escalation.user_id][:1]
         if not targets:
             return
         handoff_id = tag_handoff.new_handoff_id()
@@ -4605,19 +4754,279 @@ def create_app(
                 target=combine_handoff, args=(record, client, logger),
                 name=f"tag-handoff-{record['id']}", daemon=True,
             ).start()
+        if lead is not None:
+            expire_proposals(client, logger)
+
+    # Lead: route to one owner, and create Tags a person approves ------------
+
+    def post_in_thread(client: Any, logger: Any, channel: str, thread_ts: str, text: str,
+                       blocks: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+        try:
+            return client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text, unfurl_links=False,
+                                           unfurl_media=False, **({"blocks": blocks} if blocks else {}))
+        except Exception as exc:  # noqa: BLE001 - the caller's state is already saved
+            logger.warning("Could not post a Lead update: %s", exc)
+            return None
+
+    def start_route(client: Any, logger: Any, channel: str, thread_ts: str, requester: str,
+                    request: dict[str, Any]) -> None:
+        """Hand this thread to one owner Tag. Its own reply answers the person; nothing is combined."""
+        if lead is None or not lead.is_lead():
+            post_in_thread(client, logger, channel, thread_ts, "Only Lead routes requests, so I kept this one.")
+            return
+        owner = next((card for card in lead.lanes() if card.user_id == request["target"]["user_id"]), None)
+        if owner is None:
+            post_in_thread(client, logger, channel, thread_ts,
+                           f"{request['target']['name']} isn't a Tag I can route to, so nothing was handed over.")
+            return
+        if owner.channels and not owner.in_channel(channel):
+            post_in_thread(client, logger, channel, thread_ts,
+                           f"{owner.name} owns this, but it isn't in this channel. Invite it with /invite, "
+                           "then ask again.")
+            return
+        route_id = tag_handoff.new_route_id()
+        reason = without_bot_mentions(client, logger, request["reason"])
+        posted = post_in_thread(client, logger, channel, thread_ts, tag_handoff.route_text(
+            route_id, {"user_id": owner.user_id}, reason, requester))
+        if posted is not None:
+            lead.save_route(route_id, channel=channel, thread_ts=thread_ts, owner=owner, requester=requester)
+
+    def accept_route(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any,
+                     route: re.Match[str], sender: str) -> None:
+        """Take ownership of a thread Lead routed here, and answer the person in it."""
+        coordinator = lead.lead_card() if lead is not None else None
+        if coordinator is None or sender != coordinator.user_id or not event.get("thread_ts"):
+            logger.info("Ignoring a route from %s, which is not Lead", sender or "(unknown)")
+            return
+        route_id, requester = route.groups()
+        with handled_peer_lock:
+            key = (event.get("channel", ""), event.get("ts", ""))
+            if key in handled_peer_requests:
+                return
+            handled_peer_requests.add(key)
+        own_name = os.getenv("OPENTAG_BOT_NAME") or "this Tag"
+        if not slack_user_allowed(requester, allowed_user_ids):
+            post_in_thread(client, logger, event["channel"], event["thread_ts"],
+                           f"<@{requester}> isn't allowed to use {own_name}, so it can't take this request.")
+            return
+        reason = re.sub(r"<@[^>]+>", "", tag_handoff.ROUTE_RE.split(event.get("text", ""), maxsplit=1)[0]).strip()
+        routed = {key: value for key, value in event.items() if key not in {"bot_id", "bot_profile"}}
+        routed.update(user=requester, text=tag_handoff.route_brief(own_name, coordinator.name, reason))
+        handle_invocation(routed, body, client, logger, direct_message=False)
+
+    def start_proposal(client: Any, logger: Any, team: str, channel: str, thread_ts: str, requester: str,
+                       proposal: dict[str, Any]) -> None:
+        """Post a proposed Tag for the requester to approve. Nothing reaches Slack before that."""
+        if lead is None or not lead.is_lead():
+            post_in_thread(client, logger, channel, thread_ts,
+                           "Only Lead can create Tags. Nothing was created; ask Lead.")
+            return
+        try:
+            clean = lead.check(proposal, channel)
+        except tag_lead.LeadRefused as exc:
+            post_in_thread(client, logger, channel, thread_ts, f"I can't propose that Tag: {exc}")
+            return
+        record = lead.proposals.create(proposal=clean, lead=lead.own_id, team=team, channel=channel,
+                                        thread_ts=thread_ts, requester=requester)
+        posted = post_in_thread(client, logger, channel, thread_ts,
+                                f"Proposed new Tag: {clean['name']}", tag_proposal_blocks(record))
+        if posted is None:
+            lead.proposals.transition(record["id"], {"pending"}, "failed", note="card_not_posted")
+            return
+        lead.proposals.set_fields(record["id"], card_ts=posted.get("ts"))
+
+    def update_card(client: Any, logger: Any, record: dict[str, Any], status: str) -> None:
+        if not record.get("card_ts"):
+            return
+        try:
+            client.chat_update(channel=record["channel"], ts=record["card_ts"], text=status,
+                               blocks=tag_proposal_blocks(record, status))
+        except Exception as exc:  # noqa: BLE001 - the decision is already saved
+            logger.warning("Could not update the Tag proposal card %s: %s", record["id"], exc)
+
+    def run_creation(proposal_id: str, client: Any, logger: Any) -> None:
+        record = lead.proposals.transition(proposal_id, {"approved", "waiting_on_slack"}, "creating")
+        if record is None:
+            return  # Someone else is already creating it, or it was decided.
+        try:
+            outcome = lead.create(record, on_tag=lambda tag: lead.proposals.set_fields(proposal_id, tag=tag))
+        except tag_lead.LeadRefused as exc:
+            lead.proposals.transition(proposal_id, {"creating"}, "refused", note=str(exc))
+            post_in_thread(client, logger, record["channel"], record["thread_ts"], str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001 - report instead of leaving it creating
+            logger.warning("Could not create Tag for proposal %s: %s", proposal_id, exc)
+            lead.proposals.transition(proposal_id, {"creating"}, "waiting_on_slack", step="error")
+            text = (f"Creating {record['proposal']['name']} stopped before it finished. Progress is saved; "
+                    "press Check again to continue.")
+            post_in_thread(client, logger, record["channel"], record["thread_ts"], text,
+                           tag_creation_step_blocks(record, text))
+            return
+        lead.proposals.transition(proposal_id, {"creating"}, outcome.state, tag=outcome.tag, step=outcome.step)
+        text = " ".join([outcome.message, *outcome.notes])
+        blocks = tag_creation_step_blocks(record, text) if outcome.state == "waiting_on_slack" else None
+        post_in_thread(client, logger, record["channel"], record["thread_ts"], text, blocks)
+
+    recovered = threading.Event()
+
+    def expire_proposals(client: Any, logger: Any) -> None:
+        for record in lead.proposals.claim_expired():
+            if record.get("lead") == lead.own_id:
+                update_card(client, logger, record, "This request expired. Nothing was created.")
+        if recovered.is_set() or not lead.is_lead():
+            return
+        # Only on the first scan after startup: a creation in flight now is never "interrupted".
+        recovered.set()
+        for record in lead.proposals.interrupted():
+            if record.get("lead") != lead.own_id:
+                continue
+            text = (f"Tag restarted while creating {record['proposal']['name']}. Progress is saved; "
+                    "press Check again to continue.")
+            post_in_thread(client, logger, record["channel"], record["thread_ts"], text,
+                           tag_creation_step_blocks(record, text))
+
+    persona_proposals = tag_persona_proposals.store(instance_home())
+
+    def persona_limits() -> dict[str, Any]:
+        workdir = default_workdir()
+        return {"workspace": workdir if owns_workspace(workdir) else None,
+                "tag_name": os.getenv("OPENTAG_BOT_NAME", "") or "Tag",
+                "tag_channels": [item.strip() for item in os.getenv("SLACK_CHANNEL_IDS", "").split(",") if item.strip()],
+                "allowed_scopes": [item.strip() for item in os.getenv("MFS_ALLOWED_SCOPES", "").split(",")
+                                   if item.strip()]}
+
+    def start_persona_proposal(client: Any, logger: Any, team: str, channel: str, thread_ts: str, requester: str,
+                               proposal: dict[str, Any]) -> None:
+        """Post a proposed persona or skill for the requester to approve. Nothing is written before that."""
+        limits = persona_limits()
+        try:
+            clean = tag_persona_proposals.check(instance_home(), proposal, **limits)
+        except tag_personas.PersonaError as exc:
+            post_in_thread(client, logger, channel, thread_ts, f"I can't propose that: {exc}.")
+            return
+        record = persona_proposals.create(proposal=clean, lead=os.getenv("TAG_ID", ""), team=team, channel=channel,
+                                          thread_ts=thread_ts, requester=requester)
+        posted = post_in_thread(client, logger, channel, thread_ts, "A proposal needs your approval",
+                                persona_proposal_blocks(record, limits["tag_name"]))
+        if posted is None:
+            persona_proposals.transition(record["id"], {"pending"}, "failed", note="card_not_posted")
+            return
+        persona_proposals.set_fields(record["id"], card_ts=posted.get("ts"))
+
+    @app.action(PERSONA_PROPOSAL_APPROVE_ACTION_ID)
+    @app.action(PERSONA_PROPOSAL_REJECT_ACTION_ID)
+    def decide_persona_proposal(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        """Only the person who asked decides, once, within the hour; the change is checked again first."""
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        try:
+            action = body["actions"][0]
+            proposal_id = json.loads(action["value"])["proposal"]
+            record = persona_proposals.get(proposal_id)
+        except (KeyError, IndexError, TypeError, ValueError):
+            record, action = None, {}
+        if record is None or record.get("channel") != channel:
+            return
+        tag_name = os.getenv("OPENTAG_BOT_NAME", "") or "Tag"
+
+        def close(decided: dict[str, Any] | None, status: str) -> None:
+            if decided is None or not decided.get("card_ts"):
+                return
+            try:
+                client.chat_update(channel=channel, ts=decided["card_ts"], text=status,
+                                   blocks=persona_proposal_blocks(decided, tag_name, status))
+            except Exception as exc:  # noqa: BLE001 - the decision is already saved
+                logger.warning("Could not update the proposal card %s: %s", proposal_id, exc)
+
+        if user_id != record.get("requester") or not slack_user_allowed(user_id, allowed_user_ids):
+            try:
+                client.chat_postEphemeral(channel=channel, user=user_id, thread_ts=record["thread_ts"],
+                                          text=f"Only <@{record['requester']}>, who asked, can decide this.")
+            except Exception as exc:  # noqa: BLE001 - nothing was decided
+                logger.warning("Could not explain who decides a proposal: %s", exc)
+            return
+        if action.get("action_id") == PERSONA_PROPOSAL_REJECT_ACTION_ID:
+            close(persona_proposals.transition(proposal_id, {"pending"}, "rejected"),
+                  f"Rejected by <@{user_id}>. Nothing changed.")
+            return
+        if float(record.get("expires_at") or 0) <= time.time():
+            close(persona_proposals.transition(proposal_id, {"pending"}, "expired"),
+                  "This request expired. Nothing changed.")
+            return
+        decided = persona_proposals.transition(proposal_id, {"pending"}, "approved", note=f"approved by {user_id}")
+        if decided is None:
+            return
+        try:
+            done = tag_persona_proposals.apply(instance_home(), decided, **persona_limits())
+        except (tag_personas.PersonaError, OSError) as exc:
+            persona_proposals.transition(proposal_id, {"approved"}, "refused", note=str(exc)[:300])
+            close(decided, f"Approved by <@{user_id}>, but it can't be added now: {exc}. Nothing changed.")
+            return
+        persona_proposals.transition(proposal_id, {"approved"}, "created")
+        close(decided, f"Approved by <@{user_id}>. {done}")
+
+    @app.action(TAG_CREATE_APPROVE_ACTION_ID)
+    @app.action(TAG_CREATE_REJECT_ACTION_ID)
+    @app.action(TAG_CREATE_CHECK_ACTION_ID)
+    def decide_tag_proposal(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        """Only the person who asked, in their own thread, decides; a decision applies once."""
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        try:
+            action = body["actions"][0]
+            proposal_id = json.loads(action["value"])["proposal"]
+            record = lead.proposals.get(proposal_id) if lead is not None else None
+        except (KeyError, IndexError, TypeError, ValueError):
+            record, action = None, {}
+        if record is None or record.get("channel") != channel:
+            return
+        if user_id != record.get("requester") or not slack_user_allowed(user_id, allowed_user_ids):
+            try:
+                client.chat_postEphemeral(channel=channel, user=user_id, thread_ts=record["thread_ts"],
+                                          text=f"Only <@{record['requester']}>, who asked, can decide this.")
+            except Exception as exc:  # noqa: BLE001 - nothing was decided
+                logger.warning("Could not explain who decides a Tag proposal: %s", exc)
+            return
+        action_id = action.get("action_id")
+        if action_id == TAG_CREATE_REJECT_ACTION_ID:
+            if decided := lead.proposals.transition(proposal_id, {"pending"}, "rejected"):
+                update_card(client, logger, decided, f"Rejected by <@{user_id}>. Nothing was created.")
+            return
+        if not lead.is_lead() or record.get("lead") != lead.own_id:
+            if decided := lead.proposals.transition(proposal_id, {"pending", "waiting_on_slack"}, "refused"):
+                update_card(client, logger, decided, "This Tag is no longer Lead, so nothing was created.")
+            return
+        if action_id == TAG_CREATE_APPROVE_ACTION_ID:
+            if float(record.get("expires_at") or 0) <= time.time():
+                if decided := lead.proposals.transition(proposal_id, {"pending"}, "expired"):
+                    update_card(client, logger, decided, "This request expired. Nothing was created.")
+                return
+            decided = lead.proposals.transition(proposal_id, {"pending"}, "approved", note=f"approved by {user_id}")
+            if decided is None:
+                return
+            update_card(client, logger, decided, f"Approved by <@{user_id}>. Creating {decided['proposal']['name']}…")
+        elif action_id != TAG_CREATE_CHECK_ACTION_ID or record.get("state") != "waiting_on_slack":
+            return
+        threading.Thread(target=run_creation, args=(proposal_id, client, logger),
+                         name=f"tag-create-{proposal_id}", daemon=True).start()
 
     def posted_by_test_app(event: dict[str, Any]) -> bool:
         """Whether a listed test app posted this as a person, which Slack marks with a bot id."""
         app_id = event.get("app_id") or (event.get("bot_profile") or {}).get("app_id")
         user = event.get("user")
-        return bool(event.get("bot_id") and app_id in test_app_ids and user and user not in peer_ids)
+        return bool(event.get("bot_id") and app_id in test_app_ids and user and user not in current_peer_ids())
 
     def handle_peer_message(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any) -> None:
         sender = event.get("user", "")
-        if sender not in peer_ids:
+        if sender not in current_peer_ids():
             logger.info("Ignoring a bot mention from %s, which is not a peer Tag", sender or "(unknown)")
             return
         text = event.get("text", "")
+        if route := tag_handoff.ROUTE_RE.search(text):
+            accept_route(event, body, client, logger, route, sender)
+            return
         result = tag_handoff.RESULT_RE.search(text)
         if result:
             handoff_id, outcome = result.groups()
@@ -4671,7 +5080,7 @@ def create_app(
                 logger.info("Could not identify this Tag for handoff %s: %s", handoff_id, exc)
         others = [without_bot_mentions(client, logger, f"<@{user_id}>").lstrip("@")
                   for user_id in tag_handoff.mentioned_tags(text) if user_id != own_user]
-        sender_name = next((peer.name for peer in peers if peer.user_id == sender), "Another Tag")
+        sender_name = next((peer.name for peer in current_peers() if peer.user_id == sender), "Another Tag")
         own_name = os.getenv("OPENTAG_BOT_NAME") or (
             without_bot_mentions(client, logger, f"<@{own_user}>").lstrip("@") if own_user else "this Tag")
         peer_event.update(user=requester, text=tag_handoff.peer_brief(
@@ -4724,6 +5133,31 @@ def create_app(
             return
         team = body.get("team_id") or event.get("team") or ""
         question = strip_mention(event.get("text", ""))
+        # Personas (ADR 0012): a name first calls one; otherwise the thread keeps the one it is with.
+        personas: list[tag_personas.Persona] = []
+        active_persona: tag_personas.Persona | None = None
+        if handoff_depth == 0 and not bot_request:
+            try:
+                personas = tag_personas.load(instance_home())
+            except tag_personas.PersonaError as exc:
+                logger.warning("Ignoring this Tag's personas: %s", exc)
+        if personas:
+            own_names = [name for name in (os.getenv("OPENTAG_BOT_NAME", "").strip(),
+                                           tag_lead.ROLE_NAME if lead is not None and lead.is_lead() else "") if name]
+            # The Tag's own name, or Lead's, takes a thread back from a persona.
+            own = [tag_personas.Persona(name, "") for name in own_names]
+            if call := tag_personas.parse_call(question, personas + own):
+                question = call.text
+                active_persona = call.persona if call.persona.description else None
+                tag_personas.set_thread_persona(instance_home(), channel, thread_ts,
+                                                active_persona.name if active_persona else None, by="named")
+            else:
+                active_persona = tag_personas.find(
+                    personas, tag_personas.thread_persona(instance_home(), channel, thread_ts) or "")
+        persona_scopes = ",".join(active_persona.memory_scopes) if active_persona else ""
+        if lead is not None and handoff_depth == 0 and not direct_message and lead.is_lead():
+            if routed := lead.route_for_thread(channel, thread_ts):
+                question = f"{tag_handoff.routed_note(routed['owner_name'])}\n\n{question}"
         configured_team = os.getenv("SLACK_TEAM_ID", "").strip()
         policy_team = team if not configured_team or configured_team == team else ""
         configured_channels = os.getenv("SLACK_CHANNEL_IDS", "").strip()
@@ -4901,11 +5335,26 @@ def create_app(
         memory_receipts = tag_temp_dir() / f"memory-receipts-{uuid.uuid4().hex}.jsonl"
         handoff_requests = (
             tag_temp_dir() / f"handoff-request-{uuid.uuid4().hex}.jsonl"
-            if peer_ids and handoff_depth == 0 and not direct_message
+            if (current_peer_ids() or (lead is not None and lead.is_lead()))
+            and handoff_depth == 0 and not direct_message
             else None
         )
+        # Every request a person makes may hand over or propose; only a persona's own reply may not.
+        persona_file = (tag_temp_dir() / f"persona-{uuid.uuid4().hex}.json"
+                        if handoff_depth == 0 and not bot_request else None)
+        approval_identity = (active_persona.message_fields()
+                             if active_persona is not None and slack_customize_granted(client) else None)
+        persona_home = instance_home()
+
+        def persona_of(ts: str) -> str | None:
+            try:
+                return tag_personas.message_persona(persona_home, channel, ts)
+            except ValueError:
+                return None
 
         try:
+            if persona_file is not None:
+                tag_personas.write_run_file(persona_file, active=active_persona, personas=personas)
             with tempfile.TemporaryDirectory(
                 prefix="slack-invocation-",
                 dir=tag_temp_dir(),
@@ -4919,11 +5368,12 @@ def create_app(
                 if continued:
                     thread_text, thread_new_text = build_thread_texts(
                         client, channel, thread_ts, attachment_dir, request=None if combine else event,
-                        since_ts=continued[1], own_user=own_user,
+                        since_ts=continued[1], own_user=own_user, persona_of=persona_of if personas else None,
                     )
                 else:
                     thread_text = build_thread_text(
                         client, channel, thread_ts, attachment_dir, request=None if combine else event,
+                        persona_of=persona_of if personas else None,
                     )
                     thread_new_text = None
                 if combine:
@@ -4939,6 +5389,9 @@ def create_app(
                     and indicator.message_ts is None
                     # A reply to another Tag must be one new message that mentions it.
                     and peer_request is None
+                    # A persona's reply is posted whole under its name until streaming with a
+                    # custom name is checked live; the handover is known only once the run ends.
+                    and not personas
                 )
                 app_server_selected = rich_events_selected(request_backend)
                 if app_server_selected:
@@ -4987,6 +5440,7 @@ def create_app(
                             user_id=user_id,
                             approval=approval,
                             backend=request_backend,
+                            identity=approval_identity,
                         ),
                         fast_mode=agent_settings.fast_mode,
                         output_manifest=output_manifest,
@@ -4999,6 +5453,8 @@ def create_app(
                         memory_receipts=memory_receipts,
                         handoff_requests=handoff_requests,
                         handoff_depth=handoff_depth,
+                        persona_file=persona_file,
+                        persona_scopes=persona_scopes or None,
                         resume_session=continued[0] if continued and app_server_selected else None,
                         thread_new_text=thread_new_text,
                         on_session=capture_session if app_server_selected else None,
@@ -5024,6 +5480,8 @@ def create_app(
                         memory_receipts=memory_receipts,
                         handoff_requests=handoff_requests,
                         handoff_depth=handoff_depth,
+                        persona_file=persona_file,
+                        persona_scopes=persona_scopes or None,
                     )
                 finish_activity(
                     "completed" if succeeded else
@@ -5148,7 +5606,27 @@ def create_app(
                             except Exception as exc:  # noqa: BLE001 - the reply is already posted
                                 logger.warning("Could not delete Tag progress placeholder: %s", exc)
                     elif succeeded or stopped:
-                        post_final_reply(client, channel, thread_ts, answer, indicator.message_ts, footer_blocks)
+                        placeholder_ts = indicator.message_ts
+                        handover = (tag_personas.find(personas, tag_personas.read_handover(persona_file) or "")
+                                    if persona_file is not None and active_persona is None and succeeded else None)
+                        if handover is not None:
+                            # One line under the Tag's own name, then the reply as the persona (ADR 0012).
+                            line = tag_personas.HANDOVER_TEXT.format(name=handover.name)
+                            post_final_reply(client, channel, thread_ts, line, placeholder_ts)
+                            placeholder_ts = None
+                            tag_personas.set_thread_persona(persona_home, channel, thread_ts, handover.name,
+                                                            by="handover")
+                        speaker = handover or active_persona
+                        identity = None
+                        if speaker is not None:
+                            answer, identity = persona_reply(client, speaker, answer)
+                        posted_ts = post_final_reply(client, channel, thread_ts, answer, placeholder_ts,
+                                                     footer_blocks, identity=identity)
+                        if speaker is not None and posted_ts:
+                            try:
+                                tag_personas.record_message(persona_home, channel, posted_ts, speaker.name)
+                            except (OSError, ValueError) as exc:
+                                logger.warning("Could not record which persona replied: %s", exc)
                     else:
                         post_private_failure(
                             client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks,
@@ -5162,10 +5640,16 @@ def create_app(
                                 text=f"{tag_handoff.result_prefix(handoff_id, sender, 'failed')} "
                                 "Tag couldn't complete this request.",
                             )
+                if succeeded and persona_file is not None and active_persona is None:
+                    if persona_proposal := tag_personas.read_proposal(persona_file):
+                        start_persona_proposal(client, logger, team, channel, thread_ts, user_id, persona_proposal)
                 if succeeded and handoff_requests is not None:
-                    request = tag_handoff.read_request(handoff_requests)
-                    if request is not None:
+                    if request := tag_handoff.read_request(handoff_requests):
                         start_handoff(client, logger, team, channel, thread_ts, user_id, question, request)
+                    elif route_request := tag_handoff.read_route(handoff_requests):
+                        start_route(client, logger, channel, thread_ts, user_id, route_request)
+                    elif proposal := tag_handoff.read_proposal(handoff_requests):
+                        start_proposal(client, logger, team, channel, thread_ts, user_id, proposal)
                 if combine is not None:
                     handoff_store.finish(combine["id"], "completed" if succeeded else "failed")
                     update_handoff_status(client, logger, combine["id"])
@@ -5292,6 +5776,8 @@ def create_app(
             memory_receipts.unlink(missing_ok=True)
             if handoff_requests is not None:
                 handoff_requests.unlink(missing_ok=True)
+            if persona_file is not None:
+                persona_file.unlink(missing_ok=True)
             next_request = release_thread(thread_key)
             if next_request is not None:
                 start_waiting_request(next_request)
@@ -5744,7 +6230,7 @@ def create_app(
         if posted_by_test_app(event):
             # handle_invocation still requires the poster to be an authorized user.
             event = {key: value for key, value in event.items() if key not in {"bot_id", "bot_profile", "app_id"}}
-        elif event.get("user") not in peer_ids and slack_bot_allowed(event, allowed_bot_ids, own_bot_user_id(body)):
+        elif event.get("user") not in current_peer_ids() and slack_bot_allowed(event, allowed_bot_ids, own_bot_user_id(body)):
             if not bot_request_valid(event):
                 logger.info("Ignoring a mention from approved bot %s that is not a Hover request",
                             event.get("bot_id") or event.get("user"))
@@ -5752,7 +6238,7 @@ def create_app(
             logger.info("Accepting a mention from approved bot %s", event.get("bot_id") or event.get("user"))
             handle_invocation(event, body, client, logger, direct_message=False, bot_request=True)
             return
-        elif event.get("bot_id") or event.get("user") in peer_ids:
+        elif event.get("bot_id") or event.get("user") in current_peer_ids():
             handle_peer_message(event, body, client, logger)
             return
         handle_invocation(event, body, client, logger, direct_message=False)
@@ -5932,6 +6418,7 @@ def main() -> None:
         invitation_memory.start()
         app.tag_refresh_invitations = invitation_memory.refresh
     next_handoff_check = 0.0
+    next_card = 0.0
     next_routine_check = 0.0
     try:
         connection.connect()
@@ -5940,6 +6427,13 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001 - routines must never stop the bridge
             app.logger.warning("Could not recover routine runs: %s", exc)
         while not shutdown_requested.is_set():
+            if time.monotonic() >= next_card:
+                # Channels and names change while running; republish now and then.
+                next_card = time.monotonic() + 600
+                try:
+                    publish_roster_card(app.client)
+                except Exception as exc:  # noqa: BLE001 - routing waits for the next try
+                    app.logger.warning("Could not publish this Tag's card for Lead: %s", exc)
             if time.monotonic() >= next_routine_check:
                 next_routine_check = time.monotonic() + ROUTINE_CHECK_SECONDS
                 try:

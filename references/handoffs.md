@@ -4,6 +4,11 @@ One Tag (the sender) can ask other Tags (peers) for help and continue when they
 have all replied. Slack carries every message, so the Tags may belong to
 different people on different machines, and people can follow the exchange.
 
+When the installation has a Lead ([ADR 0011](../docs/adr/0011-lead-tag.md)),
+Tags work as a dispatcher and lanes instead; see
+[Lead routing](#lead-routing). Combining answers from
+several Tags, below, applies only when no Lead is known.
+
 ## Configuration
 
 `OPENTAG_PEER_TAGS` lists peers as `Name=MEMBERID` pairs (each Tag's bot member
@@ -60,6 +65,29 @@ answers, and the combined answer, writes app bots as plain `@Name`, found
 through `users.info` (`users:read`), so no Tag wakes up without a reason.
 People stay mentioned. A bot mention without a handoff marker is ignored
 anyway.
+
+## Lead routing
+
+- **Route.** Lead's agent runs `scripts/tag_handoff.py route --to NAME
+  --reason TEXT`. After its reply, its bridge posts one message in the same
+  thread: `<@Owner> reason` and `_Routed r-<id> for <@requester>. You own this
+  request._`.
+- **Owner.** The owner's bridge accepts the marker only from the designated
+  Lead, and only if the requester is in its `SLACK_ALLOWED_USER_IDS`.
+  It runs as the requester with the whole thread as context and answers there
+  itself. Lead writes nothing further and never rewords the answer.
+- **Peers come from the roster.** Every bridge publishes its public card at
+  `<TAG_HOME>/state/tag-roster/<id>.json` (no tokens). Lead's peers
+  are every Tag in its team; a specialist's peer is Lead. No
+  `OPENTAG_PEER_TAGS` entry is needed.
+- **Escalation.** A specialist may `ask` only Lead, one judgment
+  call, and still writes the answer. Lead never uses `ask`.
+- **Hops.** At most two Tag-to-Tag hops per request (`MAX_TAG_HOPS`): route,
+  then escalate. A Tag answering another Tag can neither route nor ask. Each
+  reply takes one Tag action (ask, route or propose).
+- **Channels.** The owner must be in the channel; otherwise Lead
+  asks the person to invite it. Mentioned again in a routed thread, Lead
+   names the owner and re-routes only if the work changed lanes.
 
 ## Limits
 

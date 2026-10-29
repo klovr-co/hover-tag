@@ -50,6 +50,28 @@ All notable changes to Tag are documented here.
   A reply of `NO_REPLY` posts nothing. Missed runs after sleep are recorded and
   caught up once, and a routine that fails five times in a row pauses itself.
   See [Routines](docs/concepts/routines.md).
+- **Lead.** One Tag per installation now routes new or unclear work
+  to one owner Tag, which answers in your thread itself. Lead
+  doesn't combine or reword answers, and mentioning a specialist directly
+  skips it. On upgrade, your main Tag gets the role; move it with
+  `tag NAME lead set` or in Tag.app's Details. With a Lead,
+  a Tag can ask only Lead for help, for a judgment call.
+- Personas: give one Tag named faces such as Finance or Designer, each with
+  a picture, description, the skills it reaches for first, a short voice and
+  how often it speaks up, with `tag NAME persona add|list|show|set|remove`.
+  They share the Tag's permissions and Slack app. In Slack, `@Tag Finance: …`
+  calls one, and the thread stays with it. When a request is clearly a
+  persona's area, the Tag posts one handover line and the persona answers
+  straight after. Replies show the persona's name and picture once the app has
+  the `chat:write.customize` scope; until then they start with its name.
+  Persona replies are posted whole rather than streamed for now.
+- When you ask for a new persona or a reusable procedure, the Tag proposes it
+  in your thread: a persona, or a skill (one page of instructions). Nothing
+  changes until you approve the card, within an hour. Skills are added only to
+  the Tag's own folder, never to a folder of yours.
+- No Tag creates new Tags for now. Lead says which existing Tag can help, or
+  answers itself ([ADR 0012](docs/adr/0012-tags-as-personas.md)).
+- `tag add --json` accepts `--preset FILE` and first reports the new Tag's ID.
 
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one
   request that mentions every Tag, links it to your thread in both directions,

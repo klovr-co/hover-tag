@@ -132,6 +132,8 @@ def backend_environment(
     memory_receipts: str | None = None,
     handoff_requests: str | None = None,
     handoff_depth: int = 0,
+    persona_file: str | None = None,
+    persona_scopes: str | None = None,
     run_limits: Mapping[str, float | int] | None = None,
     routine_id: str | None = None,
 ) -> dict[str, str]:
@@ -157,6 +159,11 @@ def backend_environment(
             clean.get("MFS_ALLOWED_SCOPES", ""), conversation_id, source
         )
     clean.pop("MFS_CHANNEL_SCOPES", None)
+    # A persona's memory scope (ADR 0012) narrows whatever the run would otherwise get.
+    if persona_scopes:
+        wanted = {scope.strip() for scope in persona_scopes.split(",") if scope.strip()}
+        clean["MFS_ALLOWED_SCOPES"] = ",".join(
+            scope for scope in clean.get("MFS_ALLOWED_SCOPES", "").split(",") if scope.strip() in wanted)
     if channel_labels:
         clean["OPENTAG_SLACK_CHANNEL_LABELS"] = channel_labels
     else:
@@ -174,6 +181,10 @@ def backend_environment(
     else:
         clean.pop("OPENTAG_HANDOFF_REQUESTS", None)
     clean["OPENTAG_HANDOFF_DEPTH"] = str(handoff_depth)
+    if persona_file:
+        clean["OPENTAG_PERSONA_FILE"] = persona_file
+    else:
+        clean.pop("OPENTAG_PERSONA_FILE", None)
     # Set only for a routine's own run, so tag routine commands can refuse to change routines from it.
     if routine_id:
         clean["OPENTAG_ROUTINE_ID"] = routine_id

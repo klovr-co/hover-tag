@@ -79,6 +79,8 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
       const event = parseSetupLine(action.line);
       if (!event) return state;
       if (event.type === "message") return { ...state, status: (event as { text: string }).text || state.status };
+      // tag add names the new Tag before its first question, so a stopped setup can still resume it.
+      if (event.type === "tag") return { ...state, tag: (event as { tag: string }).tag || state.tag };
       if (event.type === "progress" && !("backend" in event && event.backend)) {
         const step = event as { step: string; text: string };
         const done = (state.creating ?? []).filter((s) => s.step !== step.step);
@@ -115,7 +117,7 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
         const result = event as { status: string; tag?: string; error?: string; ready?: SetupReady };
         const outcome: Outcome = result.status === "complete" || result.status === "paused" ? result.status : "failed";
         const error = result.error || (outcome === "failed" && result.tag ? `This Tag needs attention. Run tag ${result.tag} doctor to see why.` : "");
-        return { ...state, question: null, creating: null, outcome, tag: result.tag ?? "", error, ready: result.ready ?? null };
+        return { ...state, question: null, creating: null, outcome, tag: result.tag ?? state.tag, error, ready: result.ready ?? null };
       }
       return state;
     }

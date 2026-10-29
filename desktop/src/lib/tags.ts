@@ -204,6 +204,10 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   const describe = useCallback((row: TagRow, description: string) =>
     attempt(row.id, [row.id, "describe", description.trim(), "--json"], "Couldn't change the description."), [attempt]);
 
+  /** Make this Tag the installation's Lead; the previous one becomes a specialist. Returns what went wrong, or "". */
+  const makeLead = useCallback((row: TagRow) =>
+    attempt(row.id, [row.id, "lead", "set", "--json"], "Couldn't make it Lead."), [attempt]);
+
   /** Set aside setups that never reached Slack. Call only when no setup is running. */
   const discardDrafts = useCallback(async () => {
     if (!api || !drafts.current.length) return;
@@ -226,7 +230,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   return {
     // Only an action's failure can be dismissed; a list failure stays until the list loads.
     rows, loaded, busy, error: error || refreshError, dismissible: !!error, setError, keepRunning,
-    refresh, refreshAutostart, start, toggle, workspace, all, rename, describe, discardDrafts, remove, setAutostart,
+    refresh, refreshAutostart, start, toggle, workspace, all, rename, describe, makeLead, discardDrafts, remove, setAutostart,
   };
 }
 

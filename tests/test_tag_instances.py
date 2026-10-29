@@ -248,7 +248,9 @@ class TagInstanceTests(unittest.TestCase):
         self.assertEqual(call.call_args.kwargs["env"]["TAG_DEFER_RENAME"], "1")
         connect.assert_not_called()  # Setup itself asks for the workspace, after the name and AI.
         events = [json.loads(line) for line in raw.getvalue().splitlines()]
-        self.assertTrue(all(event["type"] in {"message", "result"} for event in events))
+        # The new Tag is named before setup asks anything, so a client can resume it.
+        self.assertEqual(events[0], {"type": "tag", "tag": "new-tag"})
+        self.assertTrue(all(event["type"] in {"message", "result"} for event in events[1:]))
         # Setup was mocked, so the new Tag has no app yet: it keeps its
         # provisional name and progress is saved.
         self.assertEqual(events[-1], {"type": "result", "status": "paused", "tag": "new-tag", "exit_code": 0})

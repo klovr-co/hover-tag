@@ -50,7 +50,9 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
                     "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
                     "OPENTAG_CODEX_SANDBOX", "OPENTAG_CODEX_APPROVALS", "OPENTAG_CODEX_REVIEWER",
-                    "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS", "MFS_CHANNEL_SCOPES"))
+                    "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS", "MFS_CHANNEL_SCOPES",
+                    "OPENTAG_LEAD_MAX_TAGS", "OPENTAG_LEAD_SLACK_SIGN_IN",
+                    "OPENTAG_LEAD_SLACK_CONFIG", "OPENTAG_SLACK_CLI_CONFIG"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
@@ -86,6 +88,10 @@ LABELS = {
     "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
     "OPENTAG_PEER_TAGS": "Other Tags this Tag may ask (Name=MEMBERID, comma-separated)",
+    "OPENTAG_LEAD_MAX_TAGS": "Lead: most Tags in this installation (default 10)",
+    "OPENTAG_LEAD_SLACK_SIGN_IN": "Lead: service account's Slack sign-in (T… or E…)",
+    "OPENTAG_LEAD_SLACK_CONFIG": "Lead: service account's Slack CLI folder (absolute; empty for the default)",
+    "OPENTAG_SLACK_CLI_CONFIG": "Slack CLI sign-in folder for this Tag's app (absolute; empty for this computer's)",
     "SLACK_ALLOWED_BOT_IDS": "Other apps' bots that may ask this Tag (bot or member IDs, comma-separated)",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "Continue a Slack thread's conversation up to this many tokens (0 never continues)",
     "OPENTAG_THREAD_IDLE_HOURS": "Continue a Slack thread's conversation within this many idle hours (0 never continues)",
@@ -210,6 +216,12 @@ def validation_error(key: str, value: str) -> str | None:
             parse_peers(value)
         except ValueError as exc:
             return str(exc)
+    if key == "OPENTAG_LEAD_MAX_TAGS" and value and (not value.isascii() or not value.isdigit() or not 1 <= int(value) <= 50):
+        return "Use a whole number from 1 to 50"
+    if key == "OPENTAG_LEAD_SLACK_SIGN_IN" and value and not re.fullmatch(r"[TE][A-Z0-9]+", value):
+        return "Use the Slack sign-in's Team ID (T…) or organization ID (E…)"
+    if key in {"OPENTAG_LEAD_SLACK_CONFIG", "OPENTAG_SLACK_CLI_CONFIG"} and value and not Path(value).is_absolute():
+        return "Use an absolute folder, or leave empty"
     if key == "OPENTAG_TRANSPORT" and value != "slack":
         return "Only slack is supported"
     if key in {"OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS"} and (not value.isascii() or not value.isdigit() or int(value) < 1):

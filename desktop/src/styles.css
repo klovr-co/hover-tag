@@ -227,6 +227,10 @@ img.ws { padding: 0; object-fit: cover; display: block; }
 .name .mname.bad { color: var(--amber); }
 .label { font-size: 15px; font-weight: 600; color: var(--ink); }
 .main-badge { font-size: 11px; font-weight: 600; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 5px; padding: 0 5px; line-height: 16px; }
+.lead-badge { color: var(--mention); border-color: color-mix(in srgb, var(--mention) 45%, transparent); white-space: nowrap; flex: none; }
+.role-dd .link { margin-left: 8px; }
+.role-dd { flex-wrap: wrap; }
+.role-acct { display: block; flex-basis: 100%; margin-top: 4px; animation: rise2 .24s var(--ease); }
 .sub { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; }
 .sub.wrap { white-space: normal; display: block; }
 .sub.bad { color: var(--red); }
@@ -1045,6 +1049,8 @@ button.list-item:hover { background: var(--fill); }
 /* An animated waterdrop (a canvas) hops by itself when it starts or replies. */
 .r.just-on img.av, .roster img.hop { animation: hop .5s var(--spring); }
 @keyframes hop { 30% { transform: translateY(-5px); } 60% { transform: translateY(0) scaleY(.94); } }
+/* A Tag that becomes Lead: its badge hops in once, only when the role arrives. */
+.lead-badge.fresh { display: inline-block; animation: hop .5s var(--spring); }
 /* A new reply line slides in under the header, only when it's new (not each time Home opens). */
 .hello.fresh { animation: rise2 .24s var(--ease); }
 /* Tags added on Home open a gap and slide in; removed ones close theirs. */
@@ -1211,7 +1217,7 @@ button.activity-routine:hover { background: rgba(31, 126, 222, .16); }
   .model-choices .opt:active:not(:disabled), .p-btn:active:not(:disabled) { transform: none; }
   .pick-fields, .api-row.entering, .api-row.entering > img, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .api-chip, .model-edit,
   .api-progress span:last-child,
-  .flow-panel > .body > *, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic, .track .tnode img,
+  .lead-badge.fresh, .flow-panel > .body > *, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic, .track .tnode img,
   .quick-model b.fresh, .quick-made img, .quick-check, .pdet.fresh,
   .psaved li.entering, .psaved li.leaving, .pglist, .pmore,
   .rt-dot.live, .rt-dot.ran, .rt-row.fresh, .rt-row.entering, .rt-row.leaving, .rt-more, .rt-form, .rt-confirm, .rt-run { animation: none !important; }

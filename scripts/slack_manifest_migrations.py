@@ -18,6 +18,10 @@ import urllib.request
 from collections.abc import Callable
 
 try:
+    from slack_cli_config import flags as slack_cli_flags
+except ImportError:
+    from scripts.slack_cli_config import flags as slack_cli_flags
+try:
     import slack_app_create
     import slack_identity
     import slack_channels
@@ -130,6 +134,8 @@ def _json_output(output: str) -> dict:
 
 
 def _run(command: list[str], *, cwd: Path, capture: bool = True) -> subprocess.CompletedProcess:
+    # Every command here is a Slack CLI command; use the Tag's own sign-in folder.
+    command = [*command, *slack_cli_flags()]
     try:
         return subprocess.run(
             command,

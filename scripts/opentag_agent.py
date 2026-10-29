@@ -26,6 +26,7 @@ try:
     from record_output_artifact import channel_artifact_directory
     import tag_memory
     import tag_handoff
+    import tag_personas
 except ImportError:
     from scripts.agent_activity import token_usage
     from scripts import agent_connection, agent_permissions, agent_usage
@@ -33,7 +34,7 @@ except ImportError:
     from scripts.codex_agent_backend import CodexAppServer, CodexAppServerError
     from scripts.claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from scripts.record_output_artifact import channel_artifact_directory
-    from scripts import tag_memory, tag_handoff
+    from scripts import tag_memory, tag_handoff, tag_personas
 
 
 def default_skill_dir() -> Path:
@@ -99,7 +100,7 @@ def build_prompt(
     instructions = build_instructions(skill_dir=skill_dir, workdir=workdir, channel_id=channel_id,
                                       output_files=output_manifest is not None)
     request = build_request(channel_id=channel_id, question=question, thread_text=thread_text,
-                            attachments_dir=attachments_dir,
+                            attachments_dir=attachments_dir, skill_dir=skill_dir,
                             allowed_scopes=allowed_scopes, output_manifest=output_manifest)
     return f"{instructions}\n\n{request}"
 
@@ -113,6 +114,7 @@ def build_request(
     allowed_scopes: str,
     output_manifest: Path | None = None,
     continued: bool = False,
+    skill_dir: Path | None = None,
 ) -> str:
     """What changes with every Slack request: its paths, grant, question, and thread context.
 
@@ -143,12 +145,88 @@ Request context (these paths and grants apply to this request only):
 
 User question:
 {question}
-
+{persona_context(skill_dir)}
 {context}
 {thread_text or "(none)"}
 
 Return only the final chat-ready answer.
 """.strip()
+
+
+def persona_context(skill_dir: Path | None) -> str:
+    """Who this reply speaks as, from the bridge's run file (ADR 0012); empty without personas."""
+    path = os.getenv("OPENTAG_PERSONA_FILE", "")
+    document = tag_personas.read_run_file(Path(path)) if path else {}
+    if active := document.get("active"):
+        return f"""
+Persona: answer as {tag_personas.brief_text(active)}
+It is this Tag under another name; your rules and permissions are unchanged.
+"""
+    if not document or skill_dir is None:
+        return ""
+    helper = helper_command(skill_dir / "scripts" / "tag_persona.py")
+    proposing = f"""Only when someone asks for a new persona or a reusable procedure, propose one with
+`{helper} propose-persona --name NAME --description TEXT [--skill S] [--voice V]` or
+`{helper} propose-skill --name NAME --description WHEN --body-file FILE`; the person approves it.
+"""
+    personas = [item for item in document.get("personas") or [] if isinstance(item, dict)]
+    if not personas:
+        return f"\n{proposing}"
+    lines = "\n".join(f"- {tag_personas.brief_text(item)}" for item in personas)
+    return f"""
+Personas: you answer under your own name. This Tag also has these personas:
+{lines}
+Only when the request is clearly one persona's area, run
+`{helper} handover --to "NAME"` once before answering, then answer as that
+persona. Tag posts a one-line handover first. Otherwise answer yourself.
+{proposing}"""
+
+
+def lead_instructions(skill_dir: Path, channel_id: str) -> str:
+    """Lead's standing instructions: route to one owner; while creation is on hold, never propose a Tag."""
+    try:
+        import tag_lead
+    except ImportError:
+        from scripts import tag_lead
+    root, own = Path(os.getenv("TAG_HOME", "")), os.getenv("TAG_ID", "")
+    lanes = tag_lead.roster(root, own, os.getenv("SLACK_TEAM_ID", ""))
+    handoff_helper = helper_command(skill_dir / "scripts" / "tag_handoff.py")
+    lead_helper = helper_command(skill_dir / "scripts" / "tag_lead.py")
+    channels = ", ".join(item.strip() for item in os.getenv("SLACK_CHANNEL_IDS", "").split(",") if item.strip())
+    if tag_lead.CREATION_ON_HOLD:
+        creation = """- Creating new Tags is on hold. If no Tag fits, answer with your own
+  skills, and say which existing Tag can help if one can.
+"""
+    else:
+        creation = f"""- A new Tag is the last resort. First consider a skill, then an in-process
+  subagent. Propose a Tag only for a real boundary: different credentials,
+  its own memory and routines, long-running parallel work, a distinct
+  @mention identity, or a different owner or runtime. Then run
+  `{lead_helper} propose --name "NAME" --description "LANE" --boundary KIND
+  --why-not-skill "WHY" [--channel CHANNEL_ID] [--model MODEL]
+  [--routine "SCHEDULE::WHAT TO DO"]`. KIND is one of
+  {", ".join(sorted(tag_lead.BOUNDARIES))}. Channels must be ones you are in:
+  {channels or "this channel"}. Leave out --model to use your own.
+- Tag posts the proposal in this thread after your reply, and nothing is
+  created until the person who asked approves it. Say that in your reply.
+"""
+    return f"""
+Lead:
+- You are this installation's Lead, a dispatcher. Each request has
+  exactly one owner Tag, which handles it end to end and replies in the thread
+  itself. Answer quick questions about Tags, routing or priorities yourself.
+- The Tags you can route to:
+{tag_lead.roster_text(lanes, channel_id)}
+- For work in another Tag's lane, run
+  `{handoff_helper} route --to "NAME" --reason "ONE SENTENCE"` once. Tag hands
+  this thread to that Tag after your reply, and it answers here itself. Then
+  reply with just who will handle it and why. Don't start the work, and never
+  reword or summarize the owner's answer later.
+- Pick one owner. Never split a request across several Tags or ask them to
+  work on it together. Route only to a Tag that is in this channel; otherwise
+  say which Tag owns it and ask the person to invite it with /invite.
+{creation}- If a helper refuses, explain why and answer as well as you can.
+"""
 
 
 RUNTIME_SKILLS = ("tag-files", "tag-attachments", "tag-memory", "tag-slack-search", "tag-slack-actions",
@@ -179,10 +257,29 @@ def build_instructions(
     delivery = (f"\n- File delivery default: `{os.getenv('OPENTAG_FILE_DELIVERY', 'local+slack')}`"
                 if output_files else "")
     skills = [name for name in RUNTIME_SKILLS if name != "tag-handoff"]
-    handoff_instructions = ""
+    handoff_instructions = role_instructions = ""
     peers = tag_handoff.configured_peers()
-    if peers and os.getenv("OPENTAG_HANDOFF_REQUESTS") and os.getenv("OPENTAG_HANDOFF_DEPTH", "0") == "0":
+    can_act = bool(os.getenv("OPENTAG_HANDOFF_REQUESTS")) and os.getenv("OPENTAG_HANDOFF_DEPTH", "0") == "0"
+    role = tag_handoff.current_role() if can_act else tag_handoff.Role(False, None, [])
+    handoff_helper = helper_command(skill_dir / "scripts" / "tag_handoff.py")
+    if role.is_lead or role.lead is not None or (peers and can_act):
         skills.append("tag-handoff")
+    if role.is_lead:
+        role_instructions = lead_instructions(skill_dir, channel_id)
+    elif role.lead is not None:
+        role_instructions = f"""
+Lead:
+- {role.lead.name} is this installation's Lead. You own requests in
+  your lane end to end and answer them yourself.
+- Only for a judgment call you shouldn't make alone, such as a priority, an
+  owner, or work outside your lane, run
+  `{handoff_helper} ask --to "{role.lead.name}" --task "TEXT"` once. Put the
+  question and the facts it needs in `--task`. Tag continues in this thread with
+  the reply, and you still write the answer.
+- You cannot create Tags. If someone needs a new Tag, tell them to ask
+  {role.lead.name}.
+"""
+    elif peers and can_act:
         handoff_instructions = f"""
 - Other Tags you may ask: {", ".join(peer.name for peer in peers)}. Ask them only when the
   user asks you to involve, ask, or check with them (tag-handoff)."""
@@ -226,7 +323,7 @@ Rules:
 - Never comment on a file you have not opened. Never claim that something was saved,
   posted, remembered, attached, or downloadable unless its helper or the bridge
   reported success.
-
+{role_instructions}
 Answer format:
 - Return only the final chat-ready answer, concise enough for a Slack thread.
 - Ground claims in evidence or label them as inference. Do not add a Sources section
@@ -1055,6 +1152,7 @@ def main() -> int:
         output_files=args.output_manifest is not None,
     )
     request_options = dict(
+        skill_dir=args.skill_dir.resolve(),
         channel_id=args.channel_id,
         question=args.question,
         attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,

@@ -340,7 +340,7 @@ export function App() {
           )}
           {screen.name === "tag" && (
             <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
-              canDescribe={capabilities.includes("describe")} canRefreshModels={capabilities.includes(SAVED_MODELS_CAPABILITY)}
+              canDescribe={capabilities.includes("describe")} canRefreshModels={capabilities.includes(SAVED_MODELS_CAPABILITY)} canLead={capabilities.includes("lead")}
               canRoutines={capabilities.includes("routines")}
               showSettings={() => setScreen({ name: "settings" })}
               finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}

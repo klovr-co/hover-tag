@@ -42,6 +42,10 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
 | `telemetry-events` | `tag telemetry record EVENT FIELD=VALUE...`, `available` in `tag telemetry status\|on\|off --json`; see [Usage data](#usage-data) |
+| `lead` | `tag lead [status] --json`, `tag NAME lead set --json`; `lead` and `created_by_lead` in `tag list`. See [Lead](#lead) |
+| `personas` | `tag NAME persona list\|show\|add\|set\|remove --json`; see [Personas](#personas) |
+| `setup-preset` | `tag add --json --preset FILE`: a JSON object of the new Tag's first settings (`OPENTAG_BOT_NAME`, `OPENTAG_BOT_DESCRIPTION`, `OPENTAG_DEFAULT_MODEL`, `OPENTAG_DEFAULT_EFFORT`, `SLACK_ALLOWED_USER_IDS`, `OPENTAG_SLACK_CLI_CONFIG`); setup skips the questions they answer. Tokens are refused |
+| `setup-tag-event` | `tag add --json` first prints `{"type": "tag", "tag": ID}`, so a client can resume the new Tag if setup stops |
 | `setup-v2` | Setup order Your Tag → AI → Workspace → Create → Channels; `profile`, `org_workspace`, `existing_app`, and `app_checks` questions; `recap`; creation `progress`; `ready` in the result |
 
 ## Tags
@@ -49,7 +53,8 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 `tag list --json` returns `tags`, one object per Tag with `id`, `valid`,
 `state`, `slack_workspace`, `workspace_name`, `workspace_icon`, `slack_name`,
 `slack_app_id`, `slack_enterprise` (the organization's ID for a workspace in an Enterprise Grid organization, else `null`), `has_app`, `nickname`, `avatar`, `picture`, `activity_now`, `keep_running`, `main`, `description`, `default_model`,
-`default_model_label`, `default_model_name`, `default_effort`, and `channels`. `state` is
+`default_model_label`, `default_model_name`, `default_effort`, `channels`,
+`lead`, and `created_by_lead`. `state` is
 `running`, `stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
 `invalid_configuration`, or `invalid_tag`; treat unknown states as needing
 attention.
@@ -235,6 +240,37 @@ has `status` and, when it failed, `error`. See
 `protocol/examples/start-progress.jsonl`. Two different Tags can start at the
 same time; a second start of the same Tag waits up to 90 seconds for the first. Starting records that the Tag should keep running; stopping
 records that it should stay off (see [Keeping Tags running](cli-operations.md#keeping-tags-running)).
+
+## Lead
+
+`tag lead --json` returns `lead` (a Tag ID or `null`),
+`role`, `tags` (`id`, `slack_name`, `lead`, `created_by_lead`),
+`creating_tags` (`on_hold` while no Tag may create Tags, else `on`),
+`max_tags`, and `service_account` (`sign_in`, `config_dir`, `ready`).
+`tag NAME lead set --json` moves the role and returns the same
+report. Exactly one Tag holds it. Running Tags pick up the change without a
+restart. In `tag list`, `lead` marks that Tag and `created_by_lead`
+marks Tags it created. Clients show the role and offer to move it. They don't
+create Tags themselves; Lead does that in Slack, after a person
+approves.
+
+## Personas
+
+Personas are named faces over one Tag ([ADR 0012](../adr/0012-tags-as-personas.md)).
+`tag NAME persona list --json` returns `tag`, `default_persona` (the Tag's own
+name, used when no persona is named), `personas`, and `speaks_up_note`. Each
+persona has `name`, `description`, `picture` (a character name, a public
+`https://` URL, or empty), `picture_url`, `skills`, `memory_scopes` (empty
+means all of the Tag's sources), `voice`, `speaks_up` (`only-when-asked`,
+`when-addressed` or `chimes-in`), `channels` (channel ID to level), and
+`speaks_up_now`. Until channel watching ships, `speaks_up_now` is always
+`only-when-asked` and `speaks_up_note` says why when a persona asks for more;
+otherwise the note is `null`.
+
+`add`, `set` and `show` take the persona's name; `add` and `set` print the
+same report as `list`. A refused change exits 1 and prints
+`{"type": "error", "error": TEXT}`. Saving here approves exactly what is
+saved. A Tag's own agent can't change personas from inside a request.
 
 ## Setup
 

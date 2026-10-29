@@ -102,10 +102,27 @@ function row(tag: TagRow, problem: string | null = null) {
 }
 
 describe("Tag rows", () => {
+  it("mark only Lead", () => {
+    row(maya);
+    expect(screen.getByTitle("Routes new or unclear requests to one owner Tag").textContent).toBe("★ Lead");
+    cleanup();
+    row({ ...maya, lead: false });
+    expect(screen.queryByText("★ Lead")).toBeNull();
+  });
+
+  it("hop the badge only when a Tag becomes Lead, not when it is shown", () => {
+    const tags = { busy: new Set<string>(), toggle: vi.fn() } as unknown as Tags;
+    const { rerender } = render(<TagRowView row={maya} tags={tags} problem={null} open={vi.fn()} />);
+    expect(screen.getByText("★ Lead").className).not.toContain("fresh");
+    rerender(<TagRowView row={{ ...maya, lead: false }} tags={tags} problem={null} open={vi.fn()} />);
+    rerender(<TagRowView row={maya} tags={tags} problem={null} open={vi.fn()} />);
+    expect(screen.getByText("★ Lead").className).toContain("fresh");
+  });
+
   it("show the name, the model and a short thinking level, then the description", () => {
     const { open } = row(maya);
     const item = screen.getByRole("button", { name: "Open Maya's Tag, online, GPT-5.5, Medium thinking" });
-    expect(item.textContent).toContain("Maya's TagGPT-5.5 · med");
+    expect(item.textContent).toContain("Maya's Tag★ LeadGPT-5.5 · med");
     expect(item.textContent).toContain("I'm Maya's personal assistant. I help with launch work.");
     expect(screen.getByText("GPT-5.5 · med").className).toBe("mname");
     fireEvent.click(item);
