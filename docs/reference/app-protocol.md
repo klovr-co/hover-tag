@@ -299,6 +299,13 @@ has `id`, `name`, `kind` (`workspace` or `organization`), `user_id`, and
 `sign_in` asks `slack_login`, then `workspace` again. With no sign-ins at all,
 setup asks `slack_login` first.
 
+`slack_login`'s `sign_in_line` is a one-time `/slackauthticket` line that
+expires after a few minutes; when it does, Slack replies with an error instead
+of a code. Answering `"new_ticket"` (the question's `new_ticket` value) asks
+Slack for a new line, and setup asks `slack_login` again with it. Each line
+accepts three codes; a new line starts over. Setup never relays Slack CLI
+output, which can echo the line or code.
+
 Choosing an organization asks `org_workspace`: `option_ids` are its workspaces'
 `T…` IDs and `manual`, `workspaces` lists `{"id", "name"}`, and `organization`
 is `{"id", "name"}`. `manual` asks `org_workspace_id`, a `text` question for a

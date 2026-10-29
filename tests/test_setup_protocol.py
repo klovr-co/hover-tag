@@ -158,6 +158,52 @@ class SetupProtocolTests(unittest.TestCase):
         ), patch.object(opentag_setup.subprocess, "run", side_effect=[started, rejected, rejected, rejected]):
             self.assertFalse(opentag_setup.slack_login_with_client())
 
+    def test_slack_sign_in_gets_a_new_line_when_asked(self):
+        first = subprocess.CompletedProcess([], 0, "/slackauthticket OLD111\n", "stderr-noise OLD111")
+        second = subprocess.CompletedProcess([], 0, "/slackauthticket NEW222\n", "stderr-noise NEW222")
+        rejected = subprocess.CompletedProcess([], 1, b"refused OLD111", b"")
+        finished = subprocess.CompletedProcess([], 0, b"secret output NEW222", b"")
+        replies = ["CODE1", "CODE2", "new_ticket", "CODE3", "CODE4", "CODE5"]
+        with ProtocolHarness(replies) as client, patch.object(
+            opentag_setup.shutil, "which", return_value="/bin/slack"
+        ), patch.object(opentag_setup.subprocess, "run",
+                        side_effect=[first, rejected, rejected, second, rejected, rejected, finished]) as run:
+            self.assertTrue(opentag_setup.slack_login_with_client())
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[3], ["/bin/slack", "auth", "login", "--no-prompt", "--skip-update", "--no-color"])
+        # Codes after the new line go to the new ticket; the old one is never used again.
+        self.assertEqual([command[4] for command in commands[4:]], ["NEW222"] * 3)
+        questions = [event for event in client.events() if event["type"] == "question"]
+        self.assertEqual([q["sign_in_line"] for q in questions],
+                         ["/slackauthticket OLD111"] * 3 + ["/slackauthticket NEW222"] * 3)
+        self.assertTrue(all(q["new_ticket"] == "new_ticket" for q in questions))
+        output = client.stdout.getvalue()
+        for leaked in ("CODE", "secret output", "refused", "stderr-noise"):
+            self.assertNotIn(leaked, output)
+        self.assertIn("sign-in line expired", output)
+
+    def test_slack_sign_in_fails_cleanly_when_a_new_line_cannot_start(self):
+        started = subprocess.CompletedProcess([], 0, "/slackauthticket T1\n", "")
+        broken = subprocess.CompletedProcess([], 1, "no ticket here", "")
+        with ProtocolHarness(["new_ticket"]), patch.object(
+            opentag_setup.shutil, "which", return_value="/bin/slack"
+        ), patch.object(opentag_setup.subprocess, "run", side_effect=[started, broken]):
+            with self.assertRaisesRegex(RuntimeError, "did not return a sign-in line"):
+                opentag_setup.slack_login_with_client()
+
+    def test_terminal_slack_sign_in_offers_a_new_line_after_it_expires(self):
+        with patch.object(opentag_setup.ui, "protocol_active", return_value=False), patch.object(
+            opentag_setup, "run_slack_cli", side_effect=[1, 0]
+        ) as login, patch.object(opentag_setup, "confirm", return_value=True) as again:
+            self.assertTrue(opentag_setup.slack_sign_in())
+        self.assertEqual(login.call_count, 2)
+        again.assert_called_once()
+        with patch.object(opentag_setup.ui, "protocol_active", return_value=False), patch.object(
+            opentag_setup, "run_slack_cli", return_value=1
+        ) as login, patch.object(opentag_setup, "confirm", return_value=False):
+            self.assertFalse(opentag_setup.slack_sign_in())
+        login.assert_called_once()
+
     @patch.object(opentag_setup.tag_dependencies, "ensure_slack", return_value=Path("/bin/slack"))
     def test_workspace_picker_signs_in_through_the_client(self, _ensure_slack):
         listings = [subprocess.CompletedProcess([], 0, "", ""),

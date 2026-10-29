@@ -479,9 +479,11 @@ def slack_sign_in() -> bool:
     """Sign in to Slack through the Slack CLI: the ticket question, or its own prompts in a terminal."""
     if ui.protocol_active():
         return slack_login_with_client()
-    if run_slack_cli(["auth", "login"], interactive=True):
-        ui.message("Slack CLI authorization was not completed. Run tag setup to try again.")
-        return False
+    # The Slack CLI gives up once its sign-in line expires, so offer a new one here.
+    while run_slack_cli(["auth", "login"], interactive=True):
+        ui.message("Slack sign-in didn't finish. Sign-in lines expire after a few minutes.")
+        if not confirm("Get a new sign-in line and try again?", True, qid="slack_new_sign_in_line"):
+            return False
     return True
 
 
@@ -535,10 +537,12 @@ BACK_CLEARS: dict[str, tuple[str, ...]] = {
 SLACK_TICKET_LINE = re.compile(r"(?m)^\s*/slackauthticket\s+(\S+)\s*$")
 
 
-def slack_login_with_client() -> bool:
-    """Slack CLI sign-in without a terminal: the client shows the one-time
-    ticket line, the operator sends it in Slack, and returns Slack's code."""
-    slack = shutil.which("slack") or "slack"
+# Answering the slack_login question with this asks Slack for a fresh sign-in line.
+NEW_SLACK_TICKET = "new_ticket"
+
+
+def request_slack_ticket(slack: str) -> str:
+    """Start a Slack CLI sign-in and return its one-time ticket."""
     try:
         started = subprocess.run(
             [slack, "auth", "login", "--no-prompt", "--skip-update", "--no-color"],
@@ -550,9 +554,24 @@ def slack_login_with_client() -> bool:
     match = SLACK_TICKET_LINE.search((started.stdout or "") + "\n" + (started.stderr or ""))
     if not match:
         raise RuntimeError("Slack CLI did not return a sign-in line")
-    ticket = match.group(1)
-    for _attempt in range(3):
-        code = ui.ask_client("slack_login", "Sign in to Slack", sign_in_line=f"/slackauthticket {ticket}", qid="slack_login")
+    return match.group(1)
+
+
+def slack_login_with_client() -> bool:
+    """Slack CLI sign-in without a terminal: the client shows the one-time
+    ticket line, the operator sends it in Slack, and returns Slack's code.
+    Sign-in lines expire, so answering ``"new_ticket"`` asks for a fresh one."""
+    slack = shutil.which("slack") or "slack"
+    ticket = request_slack_ticket(slack)
+    attempts = 0
+    while attempts < 3:  # Codes per sign-in line; a new line starts over.
+        code = ui.ask_client("slack_login", "Sign in to Slack", sign_in_line=f"/slackauthticket {ticket}",
+                             new_ticket=NEW_SLACK_TICKET, qid="slack_login")
+        if code == NEW_SLACK_TICKET:
+            ticket, attempts = request_slack_ticket(slack), 0
+            ui.message("Here's a new sign-in line. Send it in Slack, then click Confirm.")
+            continue
+        attempts += 1
         if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_-]{4,128}", code.strip()):
             ui.message("That doesn't look like the code Slack shows. Copy it again.")
             continue
@@ -569,7 +588,8 @@ def slack_login_with_client() -> bool:
         if finished.returncode == 0:
             ui.commit()  # Signed in to Slack: Back can't undo that.
             return True
-        ui.message("Slack didn't accept that code. Check it and try again.")
+        ui.message("Slack didn't accept that code. If Slack showed an error instead of a code, "
+                   "the sign-in line expired: get a new one and try again.")
     return False
 
 
