@@ -57,6 +57,17 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("$env:TAG_SKIP_MFS_MODEL = $previousSkip", script)
         self.assertIn("} finally {\n        $env:TAG_SKIP_MFS_MODEL = $previousSkip", script)
 
+    def test_windows_installer_strips_the_extended_length_path_prefix(self) -> None:
+        # Tag.app runs install.ps1 from a \\?\C:\... resource path, which
+        # Join-Path rejects; every script-relative path must use the plain form.
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "install.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("$TagScriptRoot.StartsWith('\\\\?\\UNC\\')", script)
+        self.assertIn("$TagScriptRoot.StartsWith('\\\\?\\')", script)
+        body = script[script.index("function Write-TagProgress"):]
+        self.assertNotIn("$PSScriptRoot", body)
+
     def test_windows_bootstrap_needs_no_system_python(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "install.ps1").read_text(encoding="utf-8")
