@@ -360,7 +360,10 @@ released by the operating system when the process exits.
 Slack CLI 4.7 or newer in the 4.x line is reused when available. Otherwise Tag
 downloads the pinned Slack CLI 4.8.0 for macOS/Linux ARM64 or x86-64, or Windows
 x86-64. Slack publishes no Windows ARM64 build, so Windows on ARM gets the x86-64
-one, which Windows runs under emulation. Tag verifies its
+one, which Windows runs under emulation. The emulated CLI hangs when its console
+has no terminal window, as in Tag.app, so Tag runs it without a console whenever
+it reads the CLI's output. `slack auth login` in your own terminal still uses
+that terminal. Tag verifies its
 SHA-256, extracts only the executable, checks that it runs, and atomically
 publishes it under `TAG_HOME/runtime/slack/4.8.0`. Existing user-managed binaries,
 Slack authorization directories, and app configuration are preserved. Preparation
