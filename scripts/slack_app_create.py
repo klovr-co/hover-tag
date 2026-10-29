@@ -126,11 +126,10 @@ def prepare_project(project: Path, name: str, *, enterprise: bool = False, descr
 
 def is_installed(project: Path, team_id: str, app_id: str) -> bool:
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "app", "list", "--team", team_id,
              "--app", app_id, "--skip-update", "--no-color"],
             cwd=project, check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30,
-            **tag_dependencies.slack_run_options(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
