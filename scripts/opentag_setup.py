@@ -1752,6 +1752,10 @@ def guided_setup(
             # Until Slack is connected, a resumed setup starts at Your Tag with
             # its saved answers. Setups from before this order, paused after
             # choosing a workspace, start there too when the Tag isn't named yet.
+            # Back to a later step after signing in to Slack can't replay the
+            # name, which is saved already: don't send the operator to Your Tag.
+            if app_path and ui.going_back_past("profile"):
+                profile_done = True
             if not has_app and (ui.going_back_to("profile") or (
                     not profile_done and (not values.get("SLACK_TEAM_ID") or not app_path))):
                 show(1, "Meet your new Tag", "Your progress is saved. Ctrl-C pauses setup.")
