@@ -133,7 +133,8 @@ assets retain the original build-on-publication fallback.
 
 Before merging, decide which release each PR belongs to:
 
-- **The current line** (`VERSION` on `main`): merge it normally.
+- **The current line** (`VERSION` on `main`): queue it with Mergify (see
+  "Merging" in `CONTRIBUTING.md`).
 - **A fix for an older stable release as well:** merge it to `main`, then
   cherry-pick it to the maintenance branch, as described below.
 - **A later version:** don't merge it yet. Keep the PR as a draft with a

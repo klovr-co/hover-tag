@@ -76,6 +76,12 @@ All notable changes to Tag are documented here.
   finishes. Before, any tool result over 1 MB stopped it with "JSON message
   exceeded maximum buffer size". Tag now allows 64 MB, and a result bigger than
   that says to ask for a smaller file, fewer pages or fewer images.
+- Pausing or removing a routine while it runs now stops the run within
+  seconds. Before, the run went on, and kept spending, until it finished, and
+  only then dropped its reply.
+- Stopping or restarting a Tag during a routine run no longer posts "didn't
+  finish. The coding agent stopped unexpectedly" in the routine's channel. The
+  run is recorded as interrupted.
 - With Claude, a message sent right after stopping a request that was running a
   command now gets an answer. Before, Tag replied "Open Tag finished without
   output."

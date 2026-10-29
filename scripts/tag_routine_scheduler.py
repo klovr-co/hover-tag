@@ -263,9 +263,13 @@ class RoutineScheduler:
             late = now - latest > routines_lib.LATE_AFTER
             run_latest = _iso(latest) not in done and (
                 not late or (routine["catch_up"] == "latest" and now - latest <= routines_lib.CATCH_UP_LOOKBACK))
-            # Every slot that won't run becomes one history entry, however many there were.
+            # Every slot that won't run becomes one history entry, however many there were. Slots up to
+            # the newest one in history were already handled: if the clock stepped back, they come round
+            # again, and one missed entry can stand for several of them.
+            handled = max(filter(None, (_parse(entry.get("scheduled_for")) for entry in state["history"])),
+                          default=None)
             missed = [slot for slot in (slots[:-1] if run_latest or _iso(latest) in done else slots)
-                      if _iso(slot) not in done]
+                      if _iso(slot) not in done and (handled is None or slot > handled)]
             if missed:
                 count = len(missed)
                 reason = "" if run_latest else (" This routine skips late runs." if routine["catch_up"] == "skip"
