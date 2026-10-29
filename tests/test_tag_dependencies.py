@@ -124,6 +124,30 @@ class DependenciesTests(unittest.TestCase):
         self.assertEqual(destination.name, 'slack.exe')
         self.assertIn('windows_64-bit', download.call_args.args[0])
 
+    def test_publish_waits_for_windows_to_release_the_checked_cli(self):
+        # Windows briefly holds a just-run slack.exe open (WinError 32).
+        real_replace = os.replace
+        calls = []
+        def replace(source, target):
+            calls.append(source)
+            if len(calls) < 3:
+                raise PermissionError(32, 'The process cannot access the file')
+            real_replace(source, target)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(dependencies.os, 'replace', side_effect=replace), \
+                patch.object(dependencies.time, 'sleep') as sleep:
+            candidate, destination = Path(tmp) / 'candidate.exe', Path(tmp) / 'slack.exe'
+            candidate.write_bytes(b'cli')
+            dependencies.publish(candidate, destination)
+            self.assertEqual(destination.read_bytes(), b'cli')
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_publish_gives_up_when_the_cli_stays_locked(self):
+        with patch.object(dependencies.os, 'replace', side_effect=PermissionError(32, 'locked')), \
+                patch.object(dependencies.time, 'sleep'):
+            with self.assertRaises(PermissionError):
+                dependencies.publish(Path('candidate'), Path('destination'), attempts=3)
+
     def test_integrity_failure_and_https_redirect_rejected(self):
         for url, digest, succeeds in [('https://example.com/cli', hashlib.sha256(b'payload').hexdigest(), True),
                                      ('https://example.com/cli', '0' * 64, False), ('http://example.com/cli', '0' * 64, False)]:
