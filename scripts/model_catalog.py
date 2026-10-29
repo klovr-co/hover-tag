@@ -197,7 +197,7 @@ def refresh_in_background(backends: list[str]) -> None:
 
     It inherits the environment, so it reads from the same Tag workspace.
     """
-    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
                if os.name == "nt" else {"start_new_session": True})
     try:
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "refresh", *backends],

@@ -280,7 +280,7 @@ def _launch_flush_worker(installation_root: Path) -> None:
         if "TELEMETRY" not in key.upper() and "POSTHOG" not in key.upper()
     }
     options = (
-        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
         if os.name == "nt" else {"start_new_session": True}
     )
     try:

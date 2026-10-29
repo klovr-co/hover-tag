@@ -71,11 +71,10 @@ def delete_slack_app(home: Path, backup: Path, app: dict, executable: str, *, so
             project = Path(temporary) / "slack-cli"
             shutil.copytree(source or backup / "slack-cli", project)
             check_app_link(project, app)
-            result = subprocess.run(
+            result = tag_dependencies.run_slack(
                 [executable, "app", "delete", "--app", app["app_id"], "--team", app["team_id"],
                  "--force", "--skip-update", "--no-color"],
                 cwd=project, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90,
-                **tag_dependencies.slack_run_options(),
             )
         confirmed = result.returncode == 0
         record["status"] = "deleted" if confirmed else "unverified"

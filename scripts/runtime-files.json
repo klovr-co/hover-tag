@@ -68,6 +68,7 @@
     "scripts/slack_canvas.py",
     "scripts/slack_channel_names.py",
     "scripts/slack_channels.py",
+    "scripts/slack_console_host.py",
     "scripts/slack_credential_hook.py",
     "scripts/slack_credentials.py",
     "scripts/slack_history_search.py",

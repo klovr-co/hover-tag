@@ -264,7 +264,8 @@ See [setup and management](../tag-management.md) for the shared flow and command
 `tag paths` shows storage locations in a readable view; `tag paths --json`
 provides the same data for automation. `tag doctor` checks configuration and
 connectivity. `tag start` runs in the background until stopped or rebooted.
-Use `tag status`, `tag logs`, and `tag stop`. Put `NAME` before the command to
+On Windows, background processes get their own console with no window, and the
+programs they start share it, so running Tags don't open console windows. Use `tag status`, `tag logs`, and `tag stop`. Put `NAME` before the command to
 operate a named Tag, such as `tag personal status`; `tag list` shows all independent configurations. The dedicated `tag restart`
 command presents one operation and should be preferred to manually chaining
 stop and start. `tag autostart on` keeps wanted Tags running after login; see
@@ -360,10 +361,13 @@ released by the operating system when the process exits.
 Slack CLI 4.7 or newer in the 4.x line is reused when available. Otherwise Tag
 downloads the pinned Slack CLI 4.8.0 for macOS/Linux ARM64 or x86-64, or Windows
 x86-64. Slack publishes no Windows ARM64 build, so Windows on ARM gets the x86-64
-one, which Windows runs under emulation. The emulated CLI hangs when its console
-has no terminal window, as in Tag.app, so Tag runs it without a console whenever
-it reads the CLI's output. `slack auth login` in your own terminal still uses
-that terminal. Tag verifies its
+one, which Windows runs under emulation. At startup the CLI asks its terminal for
+the background color and waits for the answer. A console with no window, as in
+Tag.app, never answers. Whenever Tag reads the CLI's output there, it runs the
+CLI through a small helper that owns a windowless console and answers for it.
+The CLI and the hooks it starts, such as the manifest and credential hooks, stay
+in that console, so no console window opens. `slack auth login` in your own
+terminal still uses that terminal. Tag verifies its
 SHA-256, extracts only the executable, checks that it runs, and atomically
 publishes it under `TAG_HOME/runtime/slack/4.8.0`. Existing user-managed binaries,
 Slack authorization directories, and app configuration are preserved. Preparation

@@ -807,7 +807,7 @@ def start_model_download(python: Path, script: Path, home: Path) -> None:
     shared.mkdir(parents=True, exist_ok=True, mode=0o700)
     options: dict[str, Any] = {}
     if os.name == "nt":
-        options["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        options["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         options["start_new_session"] = True
     with open(shared / "model-download.log", "ab") as log:

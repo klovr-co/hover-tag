@@ -94,11 +94,11 @@ def receive(project: Path, team_id: str, app_id: str, *, enterprise_id: str = ""
         }
         environment["TAG_SLACK_HANDOFF_FILE"] = str(destination)
         try:
-            result = subprocess.run(
+            result = tag_dependencies.run_slack(
                 [slack, "deploy", "--team", authorization_id, "--app", app_id, *grant,
                  "--hide-triggers", "--skip-update", "--no-color"],
                 cwd=handoff, env=environment, input="", capture_output=True, text=True,
-                check=False, timeout=120, **tag_dependencies.slack_run_options(),
+                check=False, timeout=120,
             )
         except (OSError, subprocess.TimeoutExpired):
             raise RuntimeError("Slack CLI could not complete the connection. Check authorization and try again.") from None
