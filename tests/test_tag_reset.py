@@ -10,7 +10,7 @@ from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from scripts import tag_cli, tag_paths, tag_reset
+from scripts import tag_cli, tag_dependencies, tag_paths, tag_reset
 
 
 class ResetTests(unittest.TestCase):
@@ -49,7 +49,8 @@ class ResetTests(unittest.TestCase):
         self.lifecycle.stop_process.assert_not_called()
         remote.assert_not_called()
 
-    def test_confirmed_deletion_targets_app_and_team_and_preserves_backup(self):
+    @patch.object(tag_dependencies, "slack_console_hosted", return_value=False)  # Windows on ARM: plain argv
+    def test_confirmed_deletion_targets_app_and_team_and_preserves_backup(self, _hosted):
         self.seed_app()
         with patch.object(tag_reset.ui, "choose", side_effect=[1, 1]), patch(
             "builtins.input", return_value="AOLD"

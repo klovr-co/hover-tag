@@ -255,7 +255,9 @@ def start_process(
     record = state / f"{name}.json"
     if process_for(record):
         return False
-    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if os.name == "nt" else {"start_new_session": True}
+    # Its own console with no window, never no console at all: then every
+    # console program it starts (the venv's real Python, git, the agent CLIs) opens a window.
+    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
     with (state / f"{name}.log").open("ab") as log:
         process_cwd = cwd or Path((environment or os.environ).get("OPENTAG_WORKDIR", str(home / "workspace")))
         if cwd is None:

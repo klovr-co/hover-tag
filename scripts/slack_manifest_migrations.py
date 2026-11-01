@@ -132,7 +132,7 @@ def _json_output(output: str) -> dict:
 
 def _run(command: list[str], *, cwd: Path, capture: bool = True) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(
+        return tag_dependencies.run_slack(
             command,
             cwd=cwd,
             check=False,
@@ -140,7 +140,6 @@ def _run(command: list[str], *, cwd: Path, capture: bool = True) -> subprocess.C
             capture_output=capture,
             stdin=subprocess.DEVNULL,
             timeout=120,
-            **tag_dependencies.slack_run_options(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("Slack CLI did not complete; check its installation and retry") from exc

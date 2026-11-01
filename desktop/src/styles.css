@@ -899,6 +899,9 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .ck .ca { grid-column: 2 / 4; margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 .ck .cb { display: flex; gap: 8px; justify-content: flex-end; }
 .ck .redo { align-self: center; }
+.renew-line { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 0 4px; font-size: 12.5px; color: var(--muted); }
+.renew-line > span { flex: 1; min-width: 0; }
+.renew-line .renew { flex: none; }
 
 .mrow { display: flex; gap: 16px; align-items: center; padding: 14px 16px; }
 .mrow .pic { width: 76px; height: 76px; border-radius: 18px; object-fit: cover; image-rendering: pixelated; display: block; background: var(--tint-water); }
@@ -1036,6 +1039,17 @@ button.list-item:hover { background: var(--fill); }
 /* Progress: finished steps and checklist numbers turn green as they complete. */
 .ck .num, .tnode i, .pixbar i, .badge, .cstat .dot, .sl-item .pd { transition: background-color .24s var(--ease), color .24s; }
 .bar, .upd-bar i { transition: width .3s var(--ease); }
+/* Slack sign-in: a new sign-in line restarts the steps, which rise back in while the new line pops;
+   the button gives on press and its arrow turns while the line is fetched. A refused code shakes the field once. */
+.renew:active:not(:disabled) { transform: scale(.97); transition-duration: .06s; }
+.renew svg { transition: transform .3s var(--ease); }
+.renew:hover:not(:disabled) svg { transform: rotate(-60deg); }
+.renew.renewing svg { animation: spin .9s linear infinite; }
+.checklist.renewed .ck { animation: rise2 .24s var(--ease); }
+.checklist.renewed .ticket { animation: line-new .36s var(--spring); }
+@keyframes line-new { from { opacity: .3; transform: scale(.97); } }
+.field-wrap.refused { animation: shake .32s var(--ease); }
+@keyframes shake { 20% { transform: translateX(-4px); } 45% { transform: translateX(3px); } 70% { transform: translateX(-2px); } }
 
 /* Starting a Tag: amber and "Starting…" while it starts; then the avatar hops, the status ripples green, and "Online" fades. */
 .r.starting .badge { background: var(--amber) !important; }
@@ -1221,6 +1235,8 @@ button.activity-routine:hover { background: rgba(31, 126, 222, .16); }
   .desc-line.marquee { text-overflow: ellipsis; -webkit-mask: none; mask: none; }
   .desc-line.marquee > span, .r.click:hover .desc-line.marquee > span, .r.click:focus-visible .desc-line.marquee > span { display: inline; transform: none; transition: none; }
   .err-x:active { transform: none; }
+  .checklist.renewed .ck, .checklist.renewed .ticket, .field-wrap.refused, .renew.renewing svg { animation: none !important; }
+  .renew:active:not(:disabled), .renew:hover:not(:disabled) svg { transform: none; }
   *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }
   .tnode img { animation: none !important; }
   .slk .veil { animation: none !important; opacity: 1; }

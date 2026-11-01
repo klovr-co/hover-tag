@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts import opentag_setup as setup, slack_credentials as credentials
+from scripts import opentag_setup as setup, slack_credentials as credentials, tag_dependencies
 
 
 class SlackCredentialsTests(unittest.TestCase):
@@ -65,7 +65,8 @@ class SlackCredentialsTests(unittest.TestCase):
         })
         self.tokens = {"SLACK_APP_TOKEN": "xapp-fake-app", "SLACK_BOT_TOKEN": "xoxb-fake-bot"}
 
-    def test_receive_uses_exact_app_and_private_hook_without_original_project_changes(self):
+    @patch.object(tag_dependencies, "slack_console_hosted", return_value=False)  # Windows on ARM: plain argv
+    def test_receive_uses_exact_app_and_private_hook_without_original_project_changes(self, _hosted):
         before = {str(p): p.read_bytes() for p in self.project.rglob("*.json")}
         destinations = []
 

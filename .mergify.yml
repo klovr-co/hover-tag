@@ -43,11 +43,14 @@ shared:
 
 queue_rules:
   - name: default
-    queue_conditions:
+    queue_conditions: &queue_rule_conditions
       - and: *queue_conditions
       - and: *required_checks
-    merge_conditions:
-      - and: *required_checks
+    # Identical to queue_conditions, so Mergify treats CI as single-step: a PR
+    # already up to date with its base merges on its own passing checks
+    # instead of rerunning CI on a draft PR. When the base has moved, Mergify
+    # still tests the PR merged with the new base before merging.
+    merge_conditions: *queue_rule_conditions
     merge_method: squash
     update_method: merge
 

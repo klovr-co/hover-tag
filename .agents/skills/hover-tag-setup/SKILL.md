@@ -209,6 +209,10 @@ teach the user what an authorization ticket is.
 2. Send the user's code with `--answer '"<code>"' --question slack_login`. Setup finishes the sign-in itself and
    never echoes the code. If it rejects the code, setup says so and asks again
    with the same line. Do not echo the line or code again yourself.
+3. Sign-in lines expire after a few minutes. If Slack replies with an error
+   instead of a code, or the user went idle, send `--answer '"new_ticket"'
+   --question slack_login`. Setup asks again with a new `sign_in_line`; show
+   only that new line with the same steps.
 
 Tell the user the line and code are one-time, short-lived values. Keep them
 inside the active exchange. Do not copy them into summaries, diagnostics,

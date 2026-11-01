@@ -98,7 +98,9 @@ queue the PR.
 
 1. Waits until every CI and clean-install check passes and no review requests
    changes.
-2. Merges the base branch into the PR and waits for the checks again.
+2. If the base branch has moved, tests the PR merged with it and waits for the
+   checks again. A PR that already contains the latest base merges on its own
+   checks without rerunning CI.
 3. Squash-merges the PR, one PR at a time, so prerelease numbers follow merge
    order.
 

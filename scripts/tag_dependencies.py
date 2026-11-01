@@ -38,26 +38,44 @@ def host_machine() -> str:
     return {"aarch64": "arm64", "amd64": "x86_64"}.get(platform.machine().lower(), platform.machine().lower())
 
 
-def slack_run_options() -> dict:
-    """Options for every Slack CLI run whose output Tag captures.
+SLACK_CONSOLE_HOST = Path(__file__).resolve().with_name("slack_console_host.py")
 
-    On Windows on ARM, Slack's emulated x64 CLI hangs at startup, idle, when its
-    console has no terminal window, such as the one Tag.app's CREATE_NO_WINDOW
-    gives the CLI. With no console it finishes in about a second, and these runs
-    never need one. In a terminal window it runs normally, so interactive
-    sign-in keeps the operator's terminal.
+
+def slack_console_hosted() -> bool:
+    """Whether captured Slack CLI runs go through slack_console_host.py.
+
+    On Windows on ARM, the Slack CLI asks the terminal for its background color at
+    startup and waits for the reply with no working timeout. A console with no
+    window, such as the one Tag.app's CREATE_NO_WINDOW gives it, never replies, so
+    the CLI hangs. With no console at all it doesn't ask, but then every hook it
+    runs through PowerShell opens a new console window. The host gives it a
+    windowless console that replies.
     """
-    if sys.platform == "win32" and host_machine() == "arm64":
-        return {"creationflags": subprocess.DETACHED_PROCESS}
-    return {}
+    return sys.platform == "win32" and host_machine() == "arm64"
+
+
+def run_slack(command: list, **options) -> subprocess.CompletedProcess:
+    """``subprocess.run`` for every Slack CLI call whose output Tag captures.
+
+    In a terminal, interactive sign-in runs the CLI directly instead, so it keeps
+    the operator's terminal.
+    """
+    if slack_console_hosted():
+        # The base interpreter, not a venv's launcher: the host needs only the
+        # standard library, and the launcher's job would end whatever the CLI
+        # leaves running on purpose (a browser) when the host finishes.
+        python = getattr(sys, "_base_executable", None) or sys.executable
+        command = [python, "-I", str(SLACK_CONSOLE_HOST), *map(str, command)]
+        options["creationflags"] = options.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
+    return subprocess.run(command, **options)
 
 
 def slack_problem(command: str | Path) -> str | None:
     """Why the Slack CLI at ``command`` is unusable, or None when it runs a supported 4.x."""
     try:
-        result = subprocess.run([str(command), "version", "--skip-update", "--no-color"],
-                                capture_output=True, text=True, timeout=20, check=False,
-                                stdin=subprocess.DEVNULL, **slack_run_options())
+        result = run_slack([str(command), "version", "--skip-update", "--no-color"],
+                           capture_output=True, text=True, timeout=20, check=False,
+                           stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return "it did not finish `slack version` within 20 seconds"
     except OSError as error:

@@ -11,8 +11,10 @@ import { findModel } from "../lib/ai";
 import { fitEffort } from "../lib/model";
 import type { SetupQuestion, SetupReady, SetupWorkspace } from "../lib/protocol";
 import {
-  EXISTING_FLOW, EXIT_OPTION, FLOW, heading, initialSetup, quickAnswer, setupReducer, trackStep, type SetupState, type SignInStep,
+  CODE_REFUSED, EXISTING_FLOW, EXIT_OPTION, FLOW, heading, initialSetup, NEW_SIGN_IN_LINE, quickAnswer, setupReducer, trackStep,
+  type SetupState, type SignInStep,
 } from "../lib/setup";
+import { useFresh } from "../lib/motion";
 import { SetupTracker, setupEntry, useTrack } from "../lib/telemetry";
 import { startTag } from "../lib/tags";
 import { initialStart, START_PHASES, startReducer, type Phase, type StartProgress, type StepState } from "../lib/start";
@@ -202,7 +204,8 @@ export function Connect({ api, args, workspace, workspaceName, enterprise, done,
       case "channels": if (q.channels) return <Channels question={q} name={state.profile?.name || q.tag_name || "Tag"} send={send} back={back} />; break;
     }
     if (q.kind === "slack_login") {
-      return <SignIn api={api} question={q} state={state} setStep={(step) => dispatch({ type: "signIn", step })} send={send} />;
+      return <SignIn api={api} question={q} state={state} setStep={(step) => dispatch({ type: "signIn", step })} send={send}
+        renew={() => { dispatch({ type: "newLine" }); session.current?.send({ answer: NEW_SIGN_IN_LINE }); }} />;
     }
     return q.kind === "choose" ? <Choose key={JSON.stringify(q)} question={q} send={send} back={back} />
       : q.kind === "multi" ? <Multi key={JSON.stringify(q)} question={q} send={send} back={back} />
@@ -400,13 +403,24 @@ function ModelStep({ question, state, send, back }: {
 
 // ---- Sign in to Slack (only when needed) ---------------------------------------------------
 
-function SignIn({ api, question, state, setStep, send }: {
+/** Motion for the sign-in steps: a new line restarts them; a refused code shakes the field once. */
+export function signInMotion(state: SetupState, lineChanged: boolean, askedAgain: boolean) {
+  const renewed = lineChanged && state.signInStep === 0;
+  return { renewed, refused: askedAgain && !renewed && state.signInStep === 2 && state.error === CODE_REFUSED };
+}
+
+function SignIn({ api, question, state, setStep, send, renew }: {
   api: Bridge; question: SetupQuestion; state: SetupState; setStep: (s: SignInStep) => void; send: (a: unknown) => void;
+  renew: () => void;
 }) {
   const [code, setCode] = useState("");
   const step = state.signInStep;
   const line = question.sign_in_line ?? "";
   const checking = state.checkingCode;
+  const renewing = state.renewingLine;
+  const { renewed, refused } = signInMotion(state, useFresh(line, 600), useFresh(question, 400));
+  // A code for an old line can't work with the new one.
+  useEffect(() => { setCode(""); }, [line]);
   const connect = () => { if (code.trim() && !checking) send(code.trim()); };
   const items = [
     { title: "Copy your sign-in line", detail: "A one-time line that tells Slack this computer is yours.",
@@ -420,7 +434,7 @@ function SignIn({ api, question, state, setStep, send }: {
         <Primary small title="I clicked Confirm" autoFocus onClick={() => setStep(2)} /></div></>,
       redo: <button className="link redo" onClick={() => setStep(1)}>Show me again</button> },
     { title: "Paste the code from Slack", detail: "After you confirm, Slack shows a short code.",
-      act: <><div className="field-wrap">
+      act: <><div className={refused ? "field-wrap refused" : "field-wrap"}>
         <input className="field code" placeholder="Code from Slack" value={code} autoFocus aria-label="Code from Slack" autoComplete="off" spellCheck={false}
           readOnly={checking} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") connect(); }} />
         <button className="p-btn soft sm in-btn" disabled={checking} onClick={() => void api.paste().then((t) => setCode(t.trim()))}><Icon name="paste" />Paste</button>
@@ -430,7 +444,7 @@ function SignIn({ api, question, state, setStep, send }: {
   return (
     <FlowBody title={state.addingWorkspace ? "Sign in to another workspace" : `Sign in so ${state.profile?.name || "your Tag"} can join Slack`}
       lead="Three quick steps. You'll switch to Slack and back once." art={keyArt}>
-      <div className="card checklist">
+      <div className={renewed ? "card checklist renewed" : "card checklist"}>
         {items.map((item, i) => {
           const st = i < step ? "done" : i === step ? "now" : "pending";
           return (
@@ -442,6 +456,12 @@ function SignIn({ api, question, state, setStep, send }: {
             </div>
           );
         })}
+      </div>
+      <div className="renew-line">
+        <span>Sign-in lines expire after a few minutes. If Slack shows an error instead of a code, get a new one.</span>
+        <button className={renewing ? "link renew renewing" : "link renew"} disabled={renewing || checking} onClick={renew}>
+          <Icon name="refresh" size={13} />{renewing ? "Getting a new line…" : "Get a new sign-in line"}
+        </button>
       </div>
     </FlowBody>
   );
