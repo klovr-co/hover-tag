@@ -196,6 +196,7 @@ export interface SetupQuestion {
   can_use_existing?: boolean;
   /** workspace / org_workspace: the Slack CLI's sign-ins, or an organization's workspaces. */
   workspaces?: SetupWorkspace[];
+  /** org_workspace / org_workspace_id: the organization being picked from. */
   organization?: { id: string; name: string } | null;
   /** approve_setup: everything Create will use. */
   recap?: SetupRecap;

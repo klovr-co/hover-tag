@@ -159,6 +159,43 @@ it("reloads pictures replaced at the same path and keeps the selected picture in
   expect(pictures.filter((src) => src === selected)).toHaveLength(2);
 });
 
+describe("A workspace in an organization", () => {
+  const org = { id: "E0LAB", name: "Hover Tag Lab" };
+  const workspace = { id: "workspace", kind: "choose", prompt: "Which workspace?", options: ["Hover Tag Lab (organization)", "Sign in to another workspace", "Save and exit"],
+    option_ids: ["E0LAB", "sign_in", "exit"], workspaces: [{ id: "E0LAB", name: "Hover Tag Lab", kind: "organization", user_id: "U1", user_name: null }], can_go_back: true };
+  const orgWorkspace = { id: "org_workspace", kind: "choose", prompt: "Which workspace in Hover Tag Lab?", options: ["Workspace not listed?"],
+    option_ids: ["manual"], workspaces: [], organization: org, can_go_back: true };
+  const orgWorkspaceId = { id: "org_workspace_id", kind: "text", prompt: "Workspace address or ID (T…)", default: "", error: null, can_go_back: true };
+
+  // Setup from older releases leaves the organization off the ID question; the field must still show.
+  for (const [label, idQuestion] of [["named", { ...orgWorkspaceId, organization: org }], ["left out", orgWorkspaceId]] as const) {
+    it(`takes the workspace ID inside the organization when setup has it ${label}`, async () => {
+      const api = demoBridge();
+      const sent: unknown[] = [];
+      let emit!: (line: string) => void;
+      const ask = (question: object) => act(() => emit(JSON.stringify({ type: "question", ...question })));
+      api.setup = async (_args, onLine) => {
+        emit = onLine;
+        return { send: (message) => {
+          sent.push(message);
+          const answer = (message as { answer?: unknown }).answer;
+          if (answer === "E0LAB") setTimeout(() => ask(orgWorkspace), 0);
+          if (answer === "manual") setTimeout(() => ask(idQuestion), 0);
+        }, stop: vi.fn() };
+      };
+      render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+      ask(workspace);
+      fireEvent.click(await screen.findByRole("option", { name: /Hover Tag Lab/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "Workspace not listed?" }));
+      const field = await screen.findByPlaceholderText("Workspace address or ID (T…)");
+      fireEvent.change(field, { target: { value: "https://app.slack.com/client/T0LABENG/C1" } });
+      fireEvent.click(screen.getByRole("button", { name: "Use it" }));
+      expect(sent).toEqual([{ answer: "E0LAB" }, { answer: "manual" }, { answer: "https://app.slack.com/client/T0LABENG/C1" }]);
+    });
+  }
+});
+
 describe("Add a Tag", () => {
   it("adds to a workspace chosen on Home after asking only for the name, description and picture", async () => {
     const answers = setup(() => {}, "T0KLOVR1", "Klovr");
