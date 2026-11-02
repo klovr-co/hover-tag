@@ -436,23 +436,54 @@ def ask_text(prompt: str, *, qid: str, default: str = "", error: str | None = No
     return ask(prompt, default or None, qid=qid).strip()
 
 
-def organization_workspaces(enterprise_id: str) -> list[dict[str, str]]:
-    """Workspaces in an organization that Tag can offer to pick from.
+def slack_cli_token(authorization_id: str) -> str:
+    """The Slack CLI's own sign-in token for one organization, or "" when there is none.
 
-    Spike result (Slack CLI 4.8): the CLI lists an organization's workspaces
-    only inside its own prompts while installing or creating an app, and
-    `slack api auth.teams.list --team E…` runs without the sign-in's token
-    (`not_authed`). Calling Slack directly would mean reading the CLI's private
-    credential file, which Tag doesn't do. So there is no safe list yet, and
-    setup offers only "Workspace not listed?". Swap this function when the CLI
-    can print the list on its own.
+    Read only to list the organization's workspaces, which the CLI can't print
+    itself. Never shown, logged or saved.
     """
-    return []
+    try:
+        saved = json.loads((Path.home() / ".slack/credentials.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    entry = saved.get(authorization_id) if isinstance(saved, dict) else None
+    token = entry.get("token") if isinstance(entry, dict) else None
+    return token if isinstance(token, str) and token.startswith("xox") else ""
+
+
+def organization_workspaces(enterprise_id: str) -> list[dict[str, str]]:
+    """Workspaces in an organization that Tag can offer to pick from; empty when Slack can't say.
+
+    The Slack CLI lists them only inside its own prompts, and `slack api
+    auth.teams.list --team E…` runs without the sign-in (`not_authed`, CLI
+    4.8), so ask Slack with the CLI's sign-in instead.
+    """
+    token = slack_cli_token(enterprise_id)
+    workspaces: list[dict[str, str]] = []
+    cursor = ""
+    while token:
+        try:
+            payload = slack_channels.slack_api_post(token, "auth.teams.list",
+                                                    {"limit": "200", **({"cursor": cursor} if cursor else {})})
+        except RuntimeError:  # Offline, a lapsed sign-in or a missing scope: offer the ID field instead.
+            return []
+        for team in payload.get("teams") or []:
+            if isinstance(team, dict) and re.fullmatch(r"T[A-Z0-9]+", str(team.get("id", ""))):
+                workspaces.append({"id": str(team["id"]), "name": str(team.get("name") or team["id"])})
+        cursor = str((payload.get("response_metadata") or {}).get("next_cursor") or "")
+        if not cursor:
+            break
+    return workspaces
 
 
 def choose_org_workspace(organization: dict[str, str | None]) -> slack_identity.WorkspaceSelection:
     enterprise_id, org_name = str(organization["id"]), str(organization["name"])
     workspaces = organization_workspaces(enterprise_id)
+    if len(workspaces) == 1:
+        # Nothing to choose: Back from the next step returns to the workspace list.
+        only = workspaces[0]
+        ui.message(f"✓ {only['name']}, the only workspace in {org_name}")
+        return slack_identity.WorkspaceSelection(only["id"], only["name"], enterprise_id, org_name)
     if not ui.protocol_active():
         ui.message(f"{org_name} is an organization. Pick the one workspace this Tag works in.")
         ui.message("To find its ID, open the workspace in Slack in a browser: the address has app.slack.com/client/T….")

@@ -392,9 +392,9 @@ because an existing app keeps its own name and picture.
 
 Next comes the AI, then the Slack workspace. Setup lists the Slack CLI's
 sign-ins on this computer and signs in only when there are none or you choose
-**Sign in to another workspace**. For an organization sign-in, enter the
-workspace's address or `T…` ID (from `app.slack.com/client/T…`); Tag can't list
-an organization's workspaces yet. The person signed in to Slack becomes the
+**Sign in to another workspace**. For an organization sign-in, setup lists its
+workspaces and picks the only one by itself. If yours isn't listed, enter the
+workspace's address or `T…` ID (from `app.slack.com/client/T…`). The person signed in to Slack becomes the
 Tag's owner: Tag reads it from the sign-in, or asks Slack, and stops with
 "Sign in to Slack again" rather than guess. Nothing in Slack changes before
 this step.
