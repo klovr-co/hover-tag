@@ -34,6 +34,7 @@ try:
     import tag_credentials
     import tag_welcome
     import tag_mfs_runtime
+    from tag_process_identity import reported_by
     import tag_slack_backoff
     import tag_display as display
     import tag_autostart as autostart
@@ -54,6 +55,7 @@ except ImportError:
     from scripts import tag_credentials
     from scripts import tag_welcome
     from scripts import tag_mfs_runtime, tag_slack_backoff
+    from scripts.tag_process_identity import reported_by
     from scripts import tag_display as display
     from scripts import tag_autostart as autostart
 
@@ -233,6 +235,9 @@ def process_for(path: Path):
 
 # Seconds a new service may take to fail before it counts as started.
 STARTUP_GRACE_SECONDS = 1.5
+# Seconds a new Slack bridge may take to reach Socket Mode. Its first start after
+# setup is the slowest, and an emulated runtime (Windows on Arm) took over 30.
+SLACK_STARTUP_SECONDS = 90
 
 
 def start_process(
@@ -436,7 +441,7 @@ def slack_ready(home: Path, maximum_age: float = 5.0) -> bool:
         heartbeat = float(raw_heartbeat)
         return (
             instance_id == record["instance_id"]
-            and ready_pid == process.pid
+            and reported_by(process, ready_pid, "slack_socket_agent.py")
             and 0 <= time.time() - heartbeat <= maximum_age
         )
     except (OSError, ValueError, KeyError):
@@ -536,7 +541,7 @@ def start_development_slack(home: Path) -> None:
             environment=environment,
             metadata={"instance_id": instance_id},
         )
-    attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", "30"))
+    attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", str(SLACK_STARTUP_SECONDS)))
     for _ in range(attempts):
         if slack_ready(home):
             return
@@ -3472,7 +3477,7 @@ def _run_cli() -> int:
                     metadata={"instance_id": instance_id},
                 ):
                     started.append("slack")
-            attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", "30"))
+            attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", str(SLACK_STARTUP_SECONDS)))
             for _ in range(attempts):
                 if slack_ready(home):
                     break

@@ -57,6 +57,25 @@ class TagLifecycleTests(unittest.TestCase):
         self.write_slack_identity("launch-one", heartbeat=time.time() - 30)
         self.assertFalse(tag_cli.slack_ready(self.home))
 
+    def test_slack_readiness_accepts_the_bridge_running_under_a_windows_venv_launcher(self) -> None:
+        # A Windows venv's python.exe runs the real interpreter as a child, which
+        # then reports its own PID. This test process stands in for the launcher.
+        children = []
+        for script in ("slack_socket_agent.py", "unrelated.py"):
+            path = self.root / script
+            path.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+            child = subprocess.Popen([sys.executable, str(path)])
+            self.addCleanup(child.wait)
+            self.addCleanup(child.kill)
+            children.append(child)
+        bridge, unrelated = children
+        self.write_slack_identity("launch-one")
+        for pid, expected in ((bridge.pid, True), (unrelated.pid, False)):
+            (self.home / "state/slack.ready").write_text(
+                f"launch-one {pid} {time.time()}\n", encoding="utf-8"
+            )
+            self.assertEqual(tag_cli.slack_ready(self.home), expected)
+
     def test_status_fails_when_required_services_are_unhealthy(self) -> None:
         output = StringIO()
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
