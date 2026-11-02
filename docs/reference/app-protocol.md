@@ -348,7 +348,7 @@ creation. The CLI emits the same fields in JSON; its text summary stays textual.
 `create` makes the app, reported as `{"type": "progress", "step": …, "text": …}`
 events without a `backend`: `create` (Create the Slack app), `picture` (Add the
 picture), `install` (Install in WORKSPACE, or Add it to WORKSPACE for an
-organization), and `connect` (Connect to this Mac).
+organization), and `connect` (Connect to this Mac on macOS, Connect to this computer elsewhere).
 
 ### Your app: `existing_app`, `app_id`, `app_checks`
 
