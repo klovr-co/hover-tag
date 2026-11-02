@@ -62,8 +62,14 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("cronsim", "mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
-# How long tag start waits for a setup, start or stop that holds the Tag's locks.
-START_LOCK_WAIT_SECONDS = 90
+# Seconds a new shared MFS may take to become healthy once its search model is present.
+MFS_STARTUP_SECONDS = 90
+# Seconds a new Slack bridge may take to reach Socket Mode. Its first start after
+# setup is the slowest, and an emulated runtime (Windows on Arm) took over 30.
+SLACK_STARTUP_SECONDS = 90
+# How long tag start waits for a setup, start or stop that holds the Tag's locks:
+# long enough for a start holding them to wait out memory and Slack, then finish.
+START_LOCK_WAIT_SECONDS = MFS_STARTUP_SECONDS + SLACK_STARTUP_SECONDS + 30
 APP_IDENTITY_WAIT_SECONDS = 10
 # Contract between this CLI and desktop apps; see docs/reference/app-protocol.md.
 # Bump only for incompatible changes; add a capability for anything new.
@@ -235,9 +241,6 @@ def process_for(path: Path):
 
 # Seconds a new service may take to fail before it counts as started.
 STARTUP_GRACE_SECONDS = 1.5
-# Seconds a new Slack bridge may take to reach Socket Mode. Its first start after
-# setup is the slowest, and an emulated runtime (Windows on Arm) took over 30.
-SLACK_STARTUP_SECONDS = 90
 
 
 def start_process(
@@ -741,7 +744,7 @@ def startup_attempts(environment: dict[str, str], shared: Path) -> int:
     so a download still running (started by the installer) gets all the time it needs."""
     if "OPENTAG_MFS_STARTUP_ATTEMPTS" in environment:
         return int(environment["OPENTAG_MFS_STARTUP_ATTEMPTS"])
-    return 3600 if tag_model_download.active(shared) else 90
+    return 3600 if tag_model_download.active(shared) else MFS_STARTUP_SECONDS
 
 
 def _ensure_shared_memory_running(

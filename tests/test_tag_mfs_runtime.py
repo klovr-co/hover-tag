@@ -37,7 +37,7 @@ class RuntimeTests(unittest.TestCase):
     def test_identity_accepts_the_server_running_under_a_windows_venv_launcher(self):
         # A Windows venv's python.exe runs the real interpreter as a child, so the
         # server reports the child's PID rather than the one Tag recorded.
-        server = SimpleNamespace(pid=456, cmdline=lambda: ["python", "C:\\release\\scripts\\tag_mfs_server.py", "run"])
+        server = SimpleNamespace(pid=456, cmdline=lambda: ["python", "/release/scripts/tag_mfs_server.py", "run"])
         other = SimpleNamespace(pid=789, cmdline=lambda: ["python", "unrelated.py"])
         launcher = SimpleNamespace(pid=123, cmdline=self.process.cmdline, children=lambda: [other, server])
         tag_config.save_config(self.shared / "mfs.json", {"slack_runtime_version": tag_mfs_runtime.VERSION, "instance_id": "new"})

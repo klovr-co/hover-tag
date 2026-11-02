@@ -57,6 +57,14 @@ class TagLifecycleTests(unittest.TestCase):
         self.write_slack_identity("launch-one", heartbeat=time.time() - 30)
         self.assertFalse(tag_cli.slack_ready(self.home))
 
+    def test_a_waiting_start_outlasts_the_readiness_waits_of_the_start_it_waits_for(self) -> None:
+        # The start holding the Tag's locks keeps them while memory and then Slack
+        # become ready, so a second start must wait longer than both together.
+        self.assertGreater(
+            tag_cli.START_LOCK_WAIT_SECONDS,
+            tag_cli.MFS_STARTUP_SECONDS + tag_cli.SLACK_STARTUP_SECONDS,
+        )
+
     def test_slack_readiness_accepts_the_bridge_running_under_a_windows_venv_launcher(self) -> None:
         # A Windows venv's python.exe runs the real interpreter as a child, which
         # then reports its own PID. This test process stands in for the launcher.
