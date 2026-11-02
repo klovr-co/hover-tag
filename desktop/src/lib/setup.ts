@@ -3,6 +3,7 @@
 // The setup conversation as plain state, so the UI only draws what Tag asks.
 import { idleSignIn, signInReducer, type SignInState } from "./ai";
 import { parseSetupLine, type SetupQuestion, type SetupReady } from "./protocol";
+import { machine } from "./machine";
 
 export type SignInStep = 0 | 1 | 2; // copy the line, send it in Slack, paste the code
 export type Outcome = "complete" | "paused" | "failed";
@@ -187,9 +188,9 @@ export function heading(question: SetupQuestion): [string, string] {
     case "create_app":
       return ["Create the Slack app", "Slack creates and installs Tag's app in this workspace."];
     case "ai_connection":
-      return [`Connect ${question.tag_name || "Tag"} to an AI`, "Set up Codex or Claude on this Mac to continue."];
+      return [`Connect ${question.tag_name || "Tag"} to an AI`, `Set up Codex or Claude on this ${machine()} to continue.`];
     case "default_model":
-      return [`Choose ${question.tag_name || "Tag"}'s model`, "From the AI accounts on this Mac. Change it any time in Settings."];
+      return [`Choose ${question.tag_name || "Tag"}'s model`, `From the AI accounts on this ${machine()}. Change it any time in Settings.`];
     default:
       return [question.prompt, question.kind === "secret" ? "Stays on this computer." : ""];
   }

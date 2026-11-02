@@ -9,6 +9,7 @@ import type { Bridge, Session } from "../lib/bridge";
 import type { AIModels, AIStatus } from "../lib/ai";
 import { findModel } from "../lib/ai";
 import { fitEffort } from "../lib/model";
+import { machine } from "../lib/machine";
 import type { SetupQuestion, SetupReady, SetupWorkspace } from "../lib/protocol";
 import {
   CODE_REFUSED, EXISTING_FLOW, EXIT_OPTION, FLOW, heading, initialSetup, NEW_SIGN_IN_LINE, quickAnswer, setupReducer, trackStep,
@@ -561,7 +562,7 @@ function Create({ question, state, running, send, picture, launch }: {
   const reported = state.creating ?? [];
   const labels: Record<string, string> = {
     create: "Create the Slack app", picture: "Add the picture",
-    install: recap.workspace.organization ? `Add it to ${recap.workspace.name}` : `Install in ${recap.workspace.name}`, connect: "Connect to this Mac",
+    install: recap.workspace.organization ? `Add it to ${recap.workspace.name}` : `Install in ${recap.workspace.name}`, connect: `Connect to this ${machine()}`,
   };
   const at = Math.max(...reported.map((s) => CREATE_STEPS.indexOf(s.step)), 0);
   const pick = (id: string) => send(answerFor(question, id));

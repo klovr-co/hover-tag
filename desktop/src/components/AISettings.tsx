@@ -6,6 +6,7 @@ import type { Bridge, Session } from "../lib/bridge";
 import { idleSignIn, parseConnections, resultLine, signInArgs, signInReducer, type ApiGroup, groupApis, type Connection, type AIConnections } from "../lib/ai";
 import type { Tags } from "../lib/tags";
 import { failureLine } from "../lib/tags";
+import { machine } from "../lib/machine";
 import { title } from "../lib/protocol";
 import { ChangeAccount, ConnectionRow, type RowAction } from "./AI";
 import { ApiDialog, ApiList } from "./ApiConnections";
@@ -89,7 +90,7 @@ export function AISettings({ api, tags, close, apiConnections = false, rules = f
             : <button className="p-btn soft sm" disabled={busy} onClick={() => void reload()}>Check connections</button>}
         </div>
         <div className="card">
-          {!report && !error ? <div className="conn"><span className="cstat"><span className="spin" />Checking this Mac…</span></div>
+          {!report && !error ? <div className="conn"><span className="cstat"><span className="spin" />Checking this {machine()}…</span></div>
             : report?.connections.map((connection) => <ConnectionRow key={connection.backend} connection={connection}
               busy={busy || checking} signIn={signIn.backend === connection.backend ? signIn : null}
               quiet={!!report.usable.length && !report.usable.includes(connection.backend)} opened={opened.has(connection.backend)}
