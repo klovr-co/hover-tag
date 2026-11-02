@@ -313,12 +313,14 @@ workspace address or ID, which accepts `T…` or an address containing it, such
 as `app.slack.com/client/T…`. Its `error` explains an `E…` organization ID or
 an answer without an ID.
 
-Tag can't list an organization's workspaces yet, so `workspaces` is empty and
-only `manual` is offered. The Slack CLI (4.8) shows that list only inside its
-own prompts while it installs or creates an app, and `slack api auth.teams.list
---team E…` runs without the sign-in's token. Calling Slack directly would mean
-reading the CLI's private credential file, which Tag doesn't do. Clients should
-show the list whenever it isn't empty.
+Setup lists the organization's workspaces with Slack's `auth.teams.list`. The
+Slack CLI (4.8) can't print that list itself, and `slack api auth.teams.list
+--team E…` runs without the sign-in's token, so setup reads the CLI's token for
+that organization from `~/.slack/credentials.json` for this one call. It never
+shows, logs, or saves it. An organization with exactly one workspace asks no
+`org_workspace` question: setup picks that workspace, and Back from the next
+step returns to `workspace`. When Slack can't list them (offline, a lapsed
+sign-in), `workspaces` is empty and only `manual` is offered.
 
 The owner is always the signed-in member: `user_id` for the chosen sign-in, or
 Slack's `auth.test` through the Slack CLI's own authorization. If neither says

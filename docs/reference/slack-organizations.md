@@ -9,7 +9,8 @@ workspace inside it for your Tag. Each Tag works in that one workspace.
 1. In **Add a Tag**, go to the **Workspace** step.
 2. Choose the row marked **Organization**. If you don't see it, choose **Sign
    in to another workspace** and sign in to the organization.
-3. The app lists the organization's workspaces. Pick one.
+3. The app lists the organization's workspaces. Pick one. If the organization
+   has only one workspace, Tag picks it for you and goes on to the recap.
 4. If yours isn't listed, choose **Workspace not listed?**. Enter the
    workspace's address or its Team ID, which starts with `T`, and choose
    **Use it**.
@@ -28,9 +29,9 @@ organization ID, which starts with `E`; it isn't a workspace ID.
 
 ## Set it up in the terminal
 
-In `tag setup` (or `tag add`), select the organization sign-in, then enter the
-workspace's address or Team ID. The terminal can't list an organization's
-workspaces yet.
+In `tag setup` (or `tag add`), select the organization sign-in, then pick the
+workspace, or enter its address or Team ID if it isn't listed. With only one
+workspace, Tag picks it for you.
 
 ## How it works
 
