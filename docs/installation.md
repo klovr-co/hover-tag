@@ -25,8 +25,6 @@ Windows: coming soon. Until then, use the terminal installer. See
 The Linux app needs a desktop session. On a server without a display, use the
 terminal installer.
 
-During the 0.3 beta, downloads are prereleases.
-
 ## 2. Open it and click Install Tag
 
 Open Tag and click **Install Tag**. You don't need an administrator password.

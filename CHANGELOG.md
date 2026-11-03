@@ -2,7 +2,7 @@
 
 All notable changes to Tag are documented here.
 
-## [Unreleased]
+## [0.4.0] - 2026-11-03
 
 ### Added
 
@@ -120,6 +120,26 @@ All notable changes to Tag are documented here.
 - The docs now say the install needs about 1.8 GB of disk, not 650 MB.
 - Tag now reads all of a long text file attached in Slack, such as a large
   HTML or log file. Before, it saw only the first 12,000 characters.
+- On Windows, a new Tag now starts. Before, Tag.app showed "Shared MFS did
+  not verify its Slack rate-limit runtime" and `tag start` failed the same
+  way, because Tag didn't recognize memory and Slack services started through
+  Python's Windows launcher.
+- On Windows, Tag no longer opens empty console windows while it works in the
+  background.
+- On Windows, Tag.app's **Install Tag** now works. It no longer stops at
+  "Join-Path : Cannot process argument", and it installs under a home folder
+  with a non-ASCII name such as `C:\Users\Zoë`.
+- On Windows on ARM, the installer sets up the Slack CLI (Slack's x64 build,
+  which Windows runs under emulation), and Tag.app runs it without hanging.
+  The installer also retries when Windows still holds the new Slack CLI open
+  for a moment.
+- **Add a Tag** for a Slack organization lists the organization's workspaces
+  and picks the only one for you. **Workspace not listed?** now shows the field
+  for the workspace ID, and Back after signing in to Slack stays at the
+  workspace step instead of starting over.
+- When Slack's sign-in line expires, choose **Get a new sign-in line** instead
+  of cancelling setup. `tag setup --json` answers `new_ticket` for the same.
+- Tag.app says "this computer" instead of "this Mac" on Windows and Linux.
 
 ### Changed
 
