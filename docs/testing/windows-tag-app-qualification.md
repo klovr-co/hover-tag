@@ -36,7 +36,7 @@ installing, updating and uninstalling the NSIS installer next to the runtime
 2. SmartScreen: **PASS**: the only warning was "Windows protected your PC";
    **More info** → **Run anyway** opened the installer.
 3. Install the app: **PASS**: installed without an administrator prompt to
-   `%LOCALAPPDATA%\Tag\Tag.exe`, with a Start menu shortcut.
+   `%LOCALAPPDATA%\Tag\tag-desktop.exe`, with a Start menu shortcut.
 4. Install Tag: **PASS**: **Install Tag** finished every step. `tag version`
    printed VERSION. The memory model finished downloading on Home.
 5. Add a Tag: **PASS**: Tag `NAME` (app `A…`, workspace `T…`) set up with
@@ -58,7 +58,7 @@ installing, updating and uninstalling the NSIS installer next to the runtime
 11. App update: **PASS**: the update installed in place without an
     administrator prompt, and the app reopened as VERSION.
 12. Uninstall: **PASS**: removing Tag in **Settings** → **Apps** →
-    **Installed apps** removed `Tag.exe` and kept `%LOCALAPPDATA%\Tag\bin`,
+    **Installed apps** removed `tag-desktop.exe` and kept `%LOCALAPPDATA%\Tag\bin`,
     `home` and `releases`, and `~\Tag\NAME`. Installing again opened Home with
     the same Tag.
 ```
