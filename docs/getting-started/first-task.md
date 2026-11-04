@@ -32,7 +32,7 @@ through your first Tag.
 
 ### Install the app
 
-1. Download Tag for your Mac from the
+1. Download Tag for your computer from the
    [Tag guide](https://www.hover.team/tag/) or
    [GitHub releases](https://github.com/klovr-co/hover-tag/releases), and open
    it.
