@@ -2301,13 +2301,25 @@ class WaitingRequest:
     direct_message: bool
     client: Any
     logger: Any
+    prior_error_reference: str | None = None
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # Set by Steer now; a message that arrives during the stop then waits behind it.
+    steered: bool = False
     # Set once the request has reached the thread reservation, which then owns passing the queue on.
     settled: bool = False
 
 
 # Requests that run, in order, after the thread's current request ends.
 QUEUED_REQUESTS: dict[RunKey, list[WaitingRequest]] = {}
+# The queued request a thread was handed to, by request ID, until it claims the thread.
+THREAD_HANDOFFS: dict[RunKey, str] = {}
+
+
+def _thread_taken(key: RunKey, queued: WaitingRequest | None = None) -> bool:
+    """Whether a request holds the thread or it was handed to another request; caller holds the lock."""
+    handoff = THREAD_HANDOFFS.get(key)
+    return key in BUSY_THREADS or (
+        handoff is not None and (queued is None or queued.request_id != handoff))
 
 
 def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
@@ -2317,23 +2329,32 @@ def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
     of the queue, so the request that holds the thread starts it next.
     """
     with ACTIVE_RUNS_LOCK:
-        if key in BUSY_THREADS:
+        if _thread_taken(key, queued):
             if queued is not None:
                 QUEUED_REQUESTS.setdefault(key, []).insert(0, queued)
             return False
+        THREAD_HANDOFFS.pop(key, None)
         BUSY_THREADS.add(key)
         return True
 
 
 def _pop_queued_request(key: RunKey) -> WaitingRequest | None:
-    """Remove the next queued request; the caller holds ACTIVE_RUNS_LOCK."""
+    """Remove the next queued request and hand it the thread; the caller holds ACTIVE_RUNS_LOCK."""
     queue = QUEUED_REQUESTS.get(key)
     if not queue:
         return None
     request = queue.pop(0)
     if not queue:
         QUEUED_REQUESTS.pop(key, None)
+    THREAD_HANDOFFS[key] = request.request_id
     return request
+
+
+def drop_thread_handoff(key: RunKey, request: WaitingRequest) -> None:
+    """Take the thread back from a queued request that ended before claiming it."""
+    with ACTIVE_RUNS_LOCK:
+        if THREAD_HANDOFFS.get(key) == request.request_id:
+            THREAD_HANDOFFS.pop(key, None)
 
 
 def release_thread(key: RunKey) -> WaitingRequest | None:
@@ -2346,20 +2367,24 @@ def release_thread(key: RunKey) -> WaitingRequest | None:
 def take_next_if_idle(key: RunKey) -> WaitingRequest | None:
     """The next queued request, unless a request holds the thread and will start it itself."""
     with ACTIVE_RUNS_LOCK:
-        return None if key in BUSY_THREADS else _pop_queued_request(key)
+        return None if _thread_taken(key) else _pop_queued_request(key)
 
 
-def queue_waiting_request(key: RunKey, request: WaitingRequest, *, first: bool = False) -> bool:
-    """Queue a request behind the thread's current one; False when the thread is already free."""
+def queue_waiting_request(key: RunKey, request: WaitingRequest, *, first: bool = False) -> int | None:
+    """Queue a request behind the thread's current one and return its place; None when the thread is free.
+
+    With ``first``, the request goes ahead of everything except requests someone steered.
+    """
     with ACTIVE_RUNS_LOCK:
-        if key not in BUSY_THREADS:
-            return False
+        if not _thread_taken(key):
+            return None
         queue = QUEUED_REQUESTS.setdefault(key, [])
-        if first:
-            queue.insert(0, request)
-        else:
+        if not first:
             queue.append(request)
-        return True
+            return len(queue) - 1
+        place = next((i for i, queued in enumerate(queue) if not queued.steered), len(queue))
+        queue.insert(place, request)
+        return place
 
 
 def steer_queued_request(key: RunKey, request_id: str) -> WaitingRequest | None:
@@ -2368,6 +2393,7 @@ def steer_queued_request(key: RunKey, request_id: str) -> WaitingRequest | None:
         queue = QUEUED_REQUESTS.get(key) or []
         for index, request in enumerate(queue):
             if request.request_id == request_id:
+                request.steered = True
                 queue.insert(0, queue.pop(index))
                 return request
     return None
@@ -4734,7 +4760,8 @@ def create_app(
         # Hold the thread until this request ends so two mentions cannot resume one conversation.
         thread_key = RunKey(team, channel, thread_ts)
         waiting = queued or (
-            WaitingRequest(event, body, direct_message, client, logger)
+            WaitingRequest(event, body, direct_message, client, logger,
+                           prior_error_reference=prior_error_reference)
             # A bot cannot see a private queued notice, so a busy thread tells it so in the thread.
             if peer_request is None and combine is None and not bot_request
             else None
@@ -4754,10 +4781,11 @@ def create_app(
                 return
             # Once a stop is underway, steering means nothing; answer right after it.
             stopping = thread_stopping(thread_key)
-            if not queue_waiting_request(thread_key, waiting, first=stopping):
+            place = queue_waiting_request(thread_key, waiting, first=stopping)
+            if place is None:
                 start_waiting_request(waiting)
                 return
-            if stopping:
+            if stopping and place == 0:
                 client.chat_postEphemeral(
                     channel=channel,
                     user=user_id,
@@ -5287,12 +5315,18 @@ def create_app(
         key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
                      request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
         try:
-            handle_invocation(request.event, request.body, request.client, request.logger,
-                              direct_message=request.direct_message, queued=request)
+            # The channel may have been removed while the request waited.
+            if slack_conversation_allowed(request.event["channel"], direct_message=request.direct_message):
+                handle_invocation(request.event, request.body, request.client, request.logger,
+                                  direct_message=request.direct_message, queued=request,
+                                  prior_error_reference=request.prior_error_reference)
+            else:
+                request.logger.warning("Dropping a queued Slack request from a channel that is no longer allowed")
         except Exception:  # noqa: BLE001 - one failed request must not strand those queued behind it
             request.logger.exception("Could not run the queued Slack request")
         finally:
             if not request.settled:
+                drop_thread_handoff(key, request)
                 following = take_next_if_idle(key)
                 if following is not None:
                     start_waiting_request(following)
@@ -5327,11 +5361,12 @@ def create_app(
             ):
                 return
             key = RunKey(team, channel, thread_ts)
+            # A still-queued message waits on a run that began before this click; a later run is spared.
+            clicked_at = f"{time.time():.6f}"
             request = steer_queued_request(key, request_id)
             if request is None:
                 text = "This message isn't waiting anymore."
-            # The steering message's time keeps this from stopping a run that began after it.
-            elif cancel_active_run(key, request.event.get("ts")):
+            elif cancel_active_run(key, clicked_at):
                 text = "Stopping the earlier request. I'll answer yours next."
             else:
                 text = "I'll answer yours as soon as the earlier request ends."
