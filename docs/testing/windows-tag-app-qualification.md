@@ -5,7 +5,8 @@ copy the filled-in record into that release's file in
 [release evidence](../release-evidence/). Each item is **PASS** or **FAIL**
 with the proof named in the item: an ID, a Slack timestamp, a version, or a
 log line. A FAIL blocks the claim until it is fixed and that item is run
-again.
+again. An item that wasn't run is **NOT RUN**. A release can claim support
+with NOT RUN items only if the owner records a GO that names them.
 
 CI already covers what doesn't need a person: the Windows unit tests, the
 terminal installer started the way Tag.app starts it (install smoke), and

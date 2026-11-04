@@ -6,8 +6,9 @@ is the Tag desktop app. You can also use the terminal, or ask your coding agent.
 ## Before you begin
 
 Use a computer that can stay awake and connected to the internet while Tag
-handles requests. The Tag app is for macOS; the Windows and Linux app is coming
-soon. On Windows or Linux, use the terminal or your coding agent. You'll need:
+handles requests. The Tag app runs on macOS, Windows, and Linux with a
+desktop. On a server without a display, use the terminal or your coding agent.
+You'll need:
 
 - An AI connection: Codex or Claude Code signed in on that computer, a ChatGPT
   plan, or an API key. Setup checks it and helps you sign in.
@@ -27,7 +28,7 @@ flowchart LR
 
 ## Set up with the app
 
-The Tag app runs on macOS. It installs everything Tag needs and walks you
+The Tag app runs on macOS, Windows, and Linux. It installs everything Tag needs and walks you
 through your first Tag.
 
 ### Install the app
