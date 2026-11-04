@@ -103,4 +103,15 @@ jobs:
       - name: Test the native side
         run: npm run bundle-installer && cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build Tag.app
+        if: runner.os != 'Windows'
         run: npm run tauri -- build --debug --no-bundle
+      # Windows builds the installer the release ships, to check where it installs.
+      - name: Build Tag.app and its installer
+        if: runner.os == 'Windows'
+        # The cached target folder keeps earlier installers; start without them.
+        run: |
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue src-tauri/target/debug/bundle/nsis
+          node scripts/sync-version.mjs && npm run tauri -- build --debug --bundles nsis
+      - name: Install, update and uninstall Tag.app
+        if: runner.os == 'Windows'
+        run: ./scripts/check-windows-installer.ps1
