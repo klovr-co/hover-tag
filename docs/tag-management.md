@@ -29,7 +29,7 @@ channel.
 
 ![Home in Tag: the latest reply, a Tag to finish setting up, and Tags grouped by workspace with on/off switches](assets/screenshots/home.png)
 
-The app also lives in the menu bar.
+The app also lives in the menu bar (on Windows, the notification area).
 Its menu has **Open Tag…**, **Add Tag…**, **Settings…**, **Start All Tags**,
 **Stop All Tags**, **Keep Tags Running**, and **Quit Tag**. Closing the window
 keeps the app running there. The app tells you if a Tag goes offline

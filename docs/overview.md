@@ -7,8 +7,8 @@ or Claude Code agent in Slack, with context from Slack threads and integrations 
 connected to their agent. Requests, updates, and results stay in the thread,
 where teammates can follow the work.
 
-You don’t need to code to use Tag. Download Tag for macOS and follow
-its steps (Windows and Linux: coming soon), or see the
+You don’t need to code to use Tag. Download Tag for macOS, Windows, or
+Linux and follow its steps, or see the
 [setup guide](getting-started/first-task.md) for other ways to connect your
 agent to Slack.
 
