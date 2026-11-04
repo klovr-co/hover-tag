@@ -108,7 +108,10 @@ jobs:
       # Windows builds the installer the release ships, to check where it installs.
       - name: Build Tag.app and its installer
         if: runner.os == 'Windows'
-        run: node scripts/sync-version.mjs && npm run tauri -- build --debug --bundles nsis
+        # The cached target folder keeps earlier installers; start without them.
+        run: |
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue src-tauri/target/debug/bundle/nsis
+          node scripts/sync-version.mjs && npm run tauri -- build --debug --bundles nsis
       - name: Install, update and uninstall Tag.app
         if: runner.os == 'Windows'
         run: ./scripts/check-windows-installer.ps1

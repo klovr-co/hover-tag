@@ -4,8 +4,9 @@
 param([string]$Bundle = 'src-tauri/target/debug/bundle/nsis')
 $ErrorActionPreference = 'Stop'
 
-$setup = Get-ChildItem -LiteralPath $Bundle -Filter '*-setup.exe' | Select-Object -First 1
-if (-not $setup) { throw "No NSIS installer in $Bundle." }
+$setup = @(Get-ChildItem -LiteralPath $Bundle -Filter '*-setup.exe')
+if ($setup.Count -ne 1) { throw "Expected one NSIS installer in $Bundle, found $($setup.Count)." }
+$setup = $setup[0]
 $root = Join-Path $env:LOCALAPPDATA 'Tag'
 # The installer keeps Cargo's binary name, tag-desktop.exe.
 $app = Join-Path $root 'tag-desktop.exe'
