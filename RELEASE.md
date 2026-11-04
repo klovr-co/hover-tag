@@ -235,4 +235,6 @@ signed with a new key; people must download Tag.app again once.
 Before a stable release, qualify
 Tag.app on each platform: first-run install, adding a Tag, start and stop from
 the window and the tray, Keep Tags running across a logout, upgrade, and an
-app update from the previous release.
+app update from the previous release. On Windows, follow
+[Qualifying Tag.app on Windows](docs/testing/windows-tag-app-qualification.md)
+and record the result in the release evidence.
