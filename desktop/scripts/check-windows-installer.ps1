@@ -7,7 +7,8 @@ $ErrorActionPreference = 'Stop'
 $setup = Get-ChildItem -LiteralPath $Bundle -Filter '*-setup.exe' | Select-Object -First 1
 if (-not $setup) { throw "No NSIS installer in $Bundle." }
 $root = Join-Path $env:LOCALAPPDATA 'Tag'
-$app = Join-Path $root 'Tag.exe'
+# The installer keeps Cargo's binary name, tag-desktop.exe.
+$app = Join-Path $root 'tag-desktop.exe'
 
 # Stand-ins for what install.ps1 puts in the same folder.
 $runtime = @('bin\tag.cmd', 'home\current.json', 'releases\0.0.0\VERSION')
@@ -36,7 +37,7 @@ function Assert-Runtime([string]$After) {
 function Assert-App([bool]$Installed, [string]$After) {
     if ((Test-Path -LiteralPath $app) -ne $Installed) {
         Get-ChildItem -LiteralPath $root -Recurse | Select-Object -ExpandProperty FullName
-        throw "$After left Tag.exe $(if ($Installed) { 'missing' } else { 'in place' })."
+        throw "$After left tag-desktop.exe $(if ($Installed) { 'missing' } else { 'in place' })."
     }
 }
 
