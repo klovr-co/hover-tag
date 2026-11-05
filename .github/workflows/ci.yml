@@ -55,11 +55,12 @@ jobs:
         run: ./scripts/ci_check.sh --tests-only
       - name: Run unit tests (Windows, every failure reported)
         # pytest gives each test a time limit, so one hang can't hide the other tracebacks (#160).
+        # Windows starts processes slowly, so spread the tests over the runner's 4 cores.
         if: runner.os == 'Windows'
         run: |
           uv run --with slack-bolt==1.30.0 --with PyYAML==6.0.3 --with questionary==2.1.1 --with psutil==7.0.0 \
-            --with tomli==2.2.1 --with "PyJWT[crypto]==2.10.1" --with cronsim==2.7 --with tzdata==2026.5 --with pytest --with pytest-timeout \
-            python -m pytest tests -p no:cacheprovider -q -rfE --timeout 120 --timeout-method thread
+            --with tomli==2.2.1 --with "PyJWT[crypto]==2.10.1" --with cronsim==2.7 --with tzdata==2026.5 --with pytest --with pytest-timeout --with pytest-xdist \
+            python -m pytest tests -p no:cacheprovider -q -rfE --timeout 120 --timeout-method thread -n 4
 
 
   desktop:
