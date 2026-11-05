@@ -75,6 +75,10 @@ Merge through the Mergify merge queue, never with `gh pr merge` or GitHub's
 merge button. Set any release label first, then add the `queue` label. See
 "Merging" in `CONTRIBUTING.md` and the rules in `.mergify.yml`.
 
+After each push, wait for CodeRabbit's review. Check each comment against the
+code: fix it with a regression test, or reply with why not. Then resolve the
+thread. Mergify won't queue a PR with an unresolved thread.
+
 ### Release line targeting
 
 Before merging or recommending a merge, confirm which release the PR targets:
