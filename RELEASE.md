@@ -12,9 +12,9 @@ agent before claiming a release qualified for it. Hosted operation, enterprise p
 and production-grade sandboxing are out of scope.
 
 The canonical source repository is <https://github.com/klovr-co/hover-tag>. `VERSION`
-selects the current release line (`v0.4.0`). While `VERSION` names an alpha
+selects the current release line (`v0.5.0-alpha`). While `VERSION` names an alpha
 or beta line, eligible merges publish monotonically increasing candidates such
-as `v0.4.0-alpha.1` and `v0.4.0-alpha.2`. While it names a stable version,
+as `v0.5.0-alpha.1` and `v0.5.0-alpha.2`. While it names a stable version,
 unlabeled merges publish none. Alpha and beta releases are GitHub prereleases
 and remain opt-in. The 0.4 line published `v0.4.0-alpha` candidates before
 stable `v0.4.0`. Earlier lines published `v0.3.0-alpha` and `v0.3.0-beta`
