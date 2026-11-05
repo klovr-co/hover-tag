@@ -12,7 +12,7 @@ impact are welcome.
 ## Choosing a release
 
 `main` is the current release line, which `VERSION` names (for example,
-`0.4.0-alpha`). Every merge to `main` can publish a prerelease, so before you
+`0.5.0-alpha`). Every merge to `main` can publish a prerelease, so before you
 merge, choose one of these targets in the PR template's **Release target**
 checklist.
 
