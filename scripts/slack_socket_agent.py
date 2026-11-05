@@ -2401,6 +2401,7 @@ def steer_queued_request(key: RunKey, request_id: str) -> WaitingRequest | None:
 
 def queued_request_blocks(request_id: str, team: str, channel: str, thread_ts: str,
                           user_id: str) -> list[dict[str, Any]]:
+    """The private notice that a message is queued, with its Steer now button."""
     value = json.dumps({"request_id": request_id, "team": team, "channel": channel,
                         "thread_ts": thread_ts, "user": user_id}, separators=(",", ":"))
     return [
@@ -5332,11 +5333,21 @@ def create_app(
                     start_waiting_request(following)
 
     def start_waiting_request(request: WaitingRequest) -> None:
-        threading.Thread(target=run_queued_request, args=(request,),
-                         name="slack-queued-request", daemon=True).start()
+        """Run a queued request in the background; if it cannot start, pass the thread to the next one."""
+        try:
+            threading.Thread(target=run_queued_request, args=(request,),
+                             name="slack-queued-request", daemon=True).start()
+        except Exception:  # noqa: BLE001 - a failed start must not strand the thread
+            request.logger.exception("Could not start the queued Slack request")
+            key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
+                         request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
+            drop_thread_handoff(key, request)
+            if (following := take_next_if_idle(key)) is not None:
+                start_waiting_request(following)
 
     @app.action(STEER_NOW_ACTION_ID)
     def steer_now(ack: Any, body: dict[str, Any], client: Any, logger: Any, respond: Any) -> None:
+        """Answer a queued message next and stop the request it waits on."""
         ack()
         user_id = body.get("user", {}).get("id", "")
         channel = body.get("channel", {}).get("id", "")
@@ -5378,6 +5389,7 @@ def create_app(
     for legacy_action_id in LEGACY_WAITING_ACTION_IDS:
         @app.action(legacy_action_id)
         def expire_legacy_choice(ack: Any, respond: Any) -> None:
+            """Tell the requester a 0.4.0 Queue or Steer choice no longer works."""
             ack()
             respond(text="This choice has expired. Mention me again to send your message.",
                     response_type="ephemeral", replace_original=True)
