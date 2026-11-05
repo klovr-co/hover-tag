@@ -426,24 +426,51 @@ class WaitingRequestTests(unittest.TestCase):
         # It went back to the front, ahead of the request that was already waiting.
         self.assertEqual(["1.5", "1.6"], [r.event["ts"] for r in slack_socket_agent.QUEUED_REQUESTS[self.key]])
 
-    def test_a_request_that_finishes_starts_the_next_queued_one(self) -> None:
-        behind = slack_socket_agent.WaitingRequest(
-            {"channel": "C1", "ts": "1.6", "thread_ts": "1.0", "user": "U1", "text": "<@BOT> and C"},
-            {"team_id": "T1"}, False, self.client, MagicMock())
+    def finish_a_request_with_queued(self, *behind: object, start_error: Exception | None = None) -> list[object]:
+        """Run a request to the end with messages queued behind it; return the queued requests started."""
 
         def answer(*args: object, **kwargs: object) -> tuple[str, bool]:
-            self.assertEqual(0, slack_socket_agent.queue_waiting_request(self.key, behind))
+            for request in behind:
+                self.assertIsNotNone(slack_socket_agent.queue_waiting_request(self.key, request))
             return "done", True
+
+        queued_starts: list[object] = []
+
+        def make_thread(*args: object, **kwargs: object) -> MagicMock:
+            started = MagicMock()
+            if kwargs.get("name") == "slack-queued-request":
+                def start() -> None:
+                    if start_error is not None and not queued_starts:
+                        queued_starts.append(None)
+                        raise start_error
+                    queued_starts.append(kwargs["args"][0])
+                started.start.side_effect = start
+            return started
 
         with patch.object(slack_socket_agent, "build_thread_text", return_value="thread"), \
                 patch.object(slack_socket_agent, "run_backend_events", side_effect=answer), \
                 patch.object(slack_socket_agent.threading, "Timer"), \
-                patch.object(slack_socket_agent.threading, "Thread") as thread:
+                patch.object(slack_socket_agent.threading, "Thread", side_effect=make_thread):
             self.app.events["app_mention"](
                 {"channel": "C1", "ts": "1.5", "thread_ts": "1.0", "user": "U1", "text": "<@BOT> check A"},
                 {"team_id": "T1"}, self.client, MagicMock())
-        started = [c.kwargs["args"][0] for c in thread.call_args_list if c.kwargs.get("name") == "slack-queued-request"]
+        return [request for request in queued_starts if request is not None]
+
+    def queued(self, ts: str) -> object:
+        return slack_socket_agent.WaitingRequest(
+            {"channel": "C1", "ts": ts, "thread_ts": "1.0", "user": "U1", "text": "<@BOT> and C"},
+            {"team_id": "T1"}, False, self.client, MagicMock())
+
+    def test_a_request_that_finishes_starts_the_next_queued_one(self) -> None:
+        behind = self.queued("1.6")
+        self.assertEqual([behind], self.finish_a_request_with_queued(behind))
+        self.assertEqual(behind.request_id, slack_socket_agent.THREAD_HANDOFFS[self.key])
+
+    def test_a_queued_request_that_cannot_start_passes_the_thread_on(self) -> None:
+        failed, behind = self.queued("1.6"), self.queued("1.7")
+        started = self.finish_a_request_with_queued(failed, behind, start_error=RuntimeError("can't start new thread"))
         self.assertEqual([behind], started)
+        failed.logger.exception.assert_called_once()
         self.assertEqual(behind.request_id, slack_socket_agent.THREAD_HANDOFFS[self.key])
 
     def test_a_queued_request_from_a_channel_no_longer_allowed_is_dropped(self) -> None:
