@@ -178,8 +178,9 @@ APPROVAL_APPROVE_ACTION_ID = "opentag_approval_approve"
 APPROVAL_DENY_ACTION_ID = "opentag_approval_deny"
 APPROVAL_CHOICE_ACTION_PREFIX = "opentag_approval_choice_"
 APPROVAL_MORE_ACTION_ID = "opentag_approval_more"
-WAITING_QUEUE_ACTION_ID = "opentag_waiting_queue"
-WAITING_STEER_ACTION_ID = "opentag_waiting_steer"
+STEER_NOW_ACTION_ID = "opentag_steer_now"
+# Buttons from 0.4.0, which asked whether to queue or steer; they can still be clicked after an upgrade.
+LEGACY_WAITING_ACTION_IDS = ("opentag_waiting_queue", "opentag_waiting_steer")
 REPORT_ISSUE_ACTION_ID = "opentag_report_issue"
 FIX_WITH_AGENT_ACTION_ID = "opentag_fix_with_coding_agent"
 JOIN_COMMUNITY_ACTION_ID = "opentag_join_hover_community"
@@ -2285,11 +2286,9 @@ ACTIVE_RUNS_LOCK = threading.Lock()
 
 
 THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
-WAITING_REQUEST_MESSAGE = "I'm still working on an earlier request in this thread."
+QUEUED_REQUEST_MESSAGE = "Queued. I'll answer this after my earlier request in this thread."
 STOPPING_REQUEST_MESSAGE = "I'm stopping an earlier request in this thread. I'll answer this right after."
 STOPPING_STATUS = "Stopping…"
-# Seconds a Queue or Steer choice stays available before the request must be sent again.
-WAITING_OFFER_SECONDS = 3600.0
 BUSY_THREADS: set[RunKey] = set()
 
 
@@ -2302,15 +2301,25 @@ class WaitingRequest:
     direct_message: bool
     client: Any
     logger: Any
-    offered_at: float = field(default_factory=time.monotonic)
+    prior_error_reference: str | None = None
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # Set by Steer now; a message that arrives during the stop then waits behind it.
+    steered: bool = False
     # Set once the request has reached the thread reservation, which then owns passing the queue on.
     settled: bool = False
 
 
-# Requests offered Queue or Steer, by offer ID, until the requester chooses.
-WAITING_OFFERS: dict[str, tuple[RunKey, WaitingRequest]] = {}
 # Requests that run, in order, after the thread's current request ends.
 QUEUED_REQUESTS: dict[RunKey, list[WaitingRequest]] = {}
+# The queued request a thread was handed to, by request ID, until it claims the thread.
+THREAD_HANDOFFS: dict[RunKey, str] = {}
+
+
+def _thread_taken(key: RunKey, queued: WaitingRequest | None = None) -> bool:
+    """Whether a request holds the thread or it was handed to another request; caller holds the lock."""
+    handoff = THREAD_HANDOFFS.get(key)
+    return key in BUSY_THREADS or (
+        handoff is not None and (queued is None or queued.request_id != handoff))
 
 
 def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
@@ -2320,23 +2329,32 @@ def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
     of the queue, so the request that holds the thread starts it next.
     """
     with ACTIVE_RUNS_LOCK:
-        if key in BUSY_THREADS:
+        if _thread_taken(key, queued):
             if queued is not None:
                 QUEUED_REQUESTS.setdefault(key, []).insert(0, queued)
             return False
+        THREAD_HANDOFFS.pop(key, None)
         BUSY_THREADS.add(key)
         return True
 
 
 def _pop_queued_request(key: RunKey) -> WaitingRequest | None:
-    """Remove the next queued request; the caller holds ACTIVE_RUNS_LOCK."""
+    """Remove the next queued request and hand it the thread; the caller holds ACTIVE_RUNS_LOCK."""
     queue = QUEUED_REQUESTS.get(key)
     if not queue:
         return None
     request = queue.pop(0)
     if not queue:
         QUEUED_REQUESTS.pop(key, None)
+    THREAD_HANDOFFS[key] = request.request_id
     return request
+
+
+def drop_thread_handoff(key: RunKey, request: WaitingRequest) -> None:
+    """Take the thread back from a queued request that ended before claiming it."""
+    with ACTIVE_RUNS_LOCK:
+        if THREAD_HANDOFFS.get(key) == request.request_id:
+            THREAD_HANDOFFS.pop(key, None)
 
 
 def release_thread(key: RunKey) -> WaitingRequest | None:
@@ -2349,55 +2367,51 @@ def release_thread(key: RunKey) -> WaitingRequest | None:
 def take_next_if_idle(key: RunKey) -> WaitingRequest | None:
     """The next queued request, unless a request holds the thread and will start it itself."""
     with ACTIVE_RUNS_LOCK:
-        return None if key in BUSY_THREADS else _pop_queued_request(key)
+        return None if _thread_taken(key) else _pop_queued_request(key)
 
 
-def offer_waiting_request(key: RunKey, request: WaitingRequest) -> str:
-    offer_id = uuid.uuid4().hex
+def queue_waiting_request(key: RunKey, request: WaitingRequest, *, first: bool = False) -> int | None:
+    """Queue a request behind the thread's current one and return its place; None when the thread is free.
+
+    With ``first``, the request goes ahead of everything except requests someone steered.
+    """
     with ACTIVE_RUNS_LOCK:
-        for stale in [i for i, (_, r) in WAITING_OFFERS.items()
-                      if request.offered_at - r.offered_at > WAITING_OFFER_SECONDS]:
-            WAITING_OFFERS.pop(stale, None)
-        WAITING_OFFERS[offer_id] = (key, request)
-    return offer_id
-
-
-def take_waiting_request(offer_id: str) -> tuple[RunKey, WaitingRequest] | None:
-    with ACTIVE_RUNS_LOCK:
-        offer = WAITING_OFFERS.pop(offer_id, None)
-    if offer is None or time.monotonic() - offer[1].offered_at > WAITING_OFFER_SECONDS:
-        return None
-    return offer
-
-
-def queue_waiting_request(key: RunKey, request: WaitingRequest, *, first: bool = False) -> bool:
-    """Queue a request behind the thread's current one; False when the thread is already free."""
-    with ACTIVE_RUNS_LOCK:
-        if key not in BUSY_THREADS:
-            return False
+        if not _thread_taken(key):
+            return None
         queue = QUEUED_REQUESTS.setdefault(key, [])
-        if first:
-            queue.insert(0, request)
-        else:
+        if not first:
             queue.append(request)
-        return True
+            return len(queue) - 1
+        place = next((i for i, queued in enumerate(queue) if not queued.steered), len(queue))
+        queue.insert(place, request)
+        return place
 
 
-def waiting_request_blocks(offer_id: str, team: str, channel: str, thread_ts: str,
-                           user_id: str) -> list[dict[str, Any]]:
-    value = json.dumps({"offer_id": offer_id, "team": team, "channel": channel,
+def steer_queued_request(key: RunKey, request_id: str) -> WaitingRequest | None:
+    """Move a queued request to the front; None once it has started or is no longer queued."""
+    with ACTIVE_RUNS_LOCK:
+        queue = QUEUED_REQUESTS.get(key) or []
+        for index, request in enumerate(queue):
+            if request.request_id == request_id:
+                request.steered = True
+                queue.insert(0, queue.pop(index))
+                return request
+    return None
+
+
+def queued_request_blocks(request_id: str, team: str, channel: str, thread_ts: str,
+                          user_id: str) -> list[dict[str, Any]]:
+    """The private notice that a message is queued, with its Steer now button."""
+    value = json.dumps({"request_id": request_id, "team": team, "channel": channel,
                         "thread_ts": thread_ts, "user": user_id}, separators=(",", ":"))
     return [
-        {"type": "section", "text": {"type": "plain_text", "text":
-            f"{WAITING_REQUEST_MESSAGE}\nWhat should I do with your new message?"}},
+        {"type": "section", "text": {"type": "plain_text", "text": QUEUED_REQUEST_MESSAGE}},
         {"type": "actions", "elements": [
-            {"type": "button", "action_id": WAITING_QUEUE_ACTION_ID, "style": "primary",
-             "text": {"type": "plain_text", "text": "Queue"}, "value": value},
-            {"type": "button", "action_id": WAITING_STEER_ACTION_ID,
-             "text": {"type": "plain_text", "text": "Steer"}, "value": value},
+            {"type": "button", "action_id": STEER_NOW_ACTION_ID,
+             "text": {"type": "plain_text", "text": "Steer now"}, "value": value},
         ]},
-        {"type": "context", "elements": [{"type": "mrkdwn", "text":
-            "*Queue:* answer after. *Steer:* stop and answer this now."}]},
+        {"type": "context", "elements": [{"type": "plain_text", "text":
+            "Steer now stops the earlier request and answers this one next."}]},
     ]
 
 
@@ -4747,8 +4761,9 @@ def create_app(
         # Hold the thread until this request ends so two mentions cannot resume one conversation.
         thread_key = RunKey(team, channel, thread_ts)
         waiting = queued or (
-            WaitingRequest(event, body, direct_message, client, logger)
-            # A bot cannot choose Queue or Steer, so a busy thread tells it so in the thread.
+            WaitingRequest(event, body, direct_message, client, logger,
+                           prior_error_reference=prior_error_reference)
+            # A bot cannot see a private queued notice, so a busy thread tells it so in the thread.
             if peer_request is None and combine is None and not bot_request
             else None
         )
@@ -4765,11 +4780,13 @@ def create_app(
                     text=THREAD_BUSY_MESSAGE,
                 )
                 return
-            if thread_stopping(thread_key):
-                # Queue or Steer means nothing once a stop is underway; answer right after it.
-                if not queue_waiting_request(thread_key, waiting, first=True):
-                    start_waiting_request(waiting)
-                    return
+            # Once a stop is underway, steering means nothing; answer right after it.
+            stopping = thread_stopping(thread_key)
+            place = queue_waiting_request(thread_key, waiting, first=stopping)
+            if place is None:
+                start_waiting_request(waiting)
+                return
+            if stopping and place == 0:
                 client.chat_postEphemeral(
                     channel=channel,
                     user=user_id,
@@ -4781,10 +4798,8 @@ def create_app(
                 channel=channel,
                 user=user_id,
                 thread_ts=thread_ts,
-                text=WAITING_REQUEST_MESSAGE,
-                blocks=waiting_request_blocks(
-                    offer_waiting_request(thread_key, waiting), team, channel, thread_ts, user_id,
-                ),
+                text=QUEUED_REQUEST_MESSAGE,
+                blocks=queued_request_blocks(waiting.request_id, team, channel, thread_ts, user_id),
             )
             return
 
@@ -5301,38 +5316,50 @@ def create_app(
         key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
                      request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
         try:
-            handle_invocation(request.event, request.body, request.client, request.logger,
-                              direct_message=request.direct_message, queued=request)
+            # The channel may have been removed while the request waited.
+            if slack_conversation_allowed(request.event["channel"], direct_message=request.direct_message):
+                handle_invocation(request.event, request.body, request.client, request.logger,
+                                  direct_message=request.direct_message, queued=request,
+                                  prior_error_reference=request.prior_error_reference)
+            else:
+                request.logger.warning("Dropping a queued Slack request from a channel that is no longer allowed")
         except Exception:  # noqa: BLE001 - one failed request must not strand those queued behind it
             request.logger.exception("Could not run the queued Slack request")
         finally:
             if not request.settled:
+                drop_thread_handoff(key, request)
                 following = take_next_if_idle(key)
                 if following is not None:
                     start_waiting_request(following)
 
     def start_waiting_request(request: WaitingRequest) -> None:
-        threading.Thread(target=run_queued_request, args=(request,),
-                         name="slack-queued-request", daemon=True).start()
+        """Run a queued request in the background; if it cannot start, pass the thread to the next one."""
+        try:
+            threading.Thread(target=run_queued_request, args=(request,),
+                             name="slack-queued-request", daemon=True).start()
+        except Exception:  # noqa: BLE001 - a failed start must not strand the thread
+            request.logger.exception("Could not start the queued Slack request")
+            key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
+                         request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
+            drop_thread_handoff(key, request)
+            if (following := take_next_if_idle(key)) is not None:
+                start_waiting_request(following)
 
-    @app.action(WAITING_QUEUE_ACTION_ID)
-    @app.action(WAITING_STEER_ACTION_ID)
-    def choose_waiting_request(ack: Any, body: dict[str, Any], client: Any, logger: Any,
-                               respond: Any) -> None:
+    @app.action(STEER_NOW_ACTION_ID)
+    def steer_now(ack: Any, body: dict[str, Any], client: Any, logger: Any, respond: Any) -> None:
+        """Answer a queued message next and stop the request it waits on."""
         ack()
         user_id = body.get("user", {}).get("id", "")
         channel = body.get("channel", {}).get("id", "")
         body_team = body.get("team", {}).get("id", "") or body.get("team_id", "")
         try:
-            action = body["actions"][0]
-            steer = action.get("action_id") == WAITING_STEER_ACTION_ID
-            metadata = json.loads(action["value"])
-            offer_id = metadata["offer_id"]
+            metadata = json.loads(body["actions"][0]["value"])
+            request_id = metadata["request_id"]
             team = metadata["team"]
             thread_ts = metadata["thread_ts"]
             if not all(isinstance(value, str) and value for value in (
-                    offer_id, team, metadata["channel"], thread_ts, metadata["user"])):
-                raise ValueError("invalid waiting request metadata")
+                    request_id, team, metadata["channel"], thread_ts, metadata["user"])):
+                raise ValueError("invalid queued request metadata")
             if (
                 body_team != team
                 or channel != metadata["channel"]
@@ -5344,26 +5371,28 @@ def create_app(
                 )
             ):
                 return
-            offer = take_waiting_request(offer_id)
-            if offer is None or offer[0] != RunKey(team, channel, thread_ts):
-                respond(text="This choice has expired. Mention me again to send your message.",
-                        response_type="ephemeral", replace_original=True)
-                return
-            key, request = offer
-            if not queue_waiting_request(key, request, first=steer):
-                text = "The earlier request has finished. Starting yours now."
-                start_waiting_request(request)
-            elif steer:
-                # The steering message's time keeps this from stopping a run that began after it.
-                stopped = cancel_active_run(key, request.event.get("ts"))
-                text = ("Stopping the current request. I'll answer yours next."
-                        if stopped else "I'll answer yours as soon as the current request ends.")
+            key = RunKey(team, channel, thread_ts)
+            # A still-queued message waits on a run that began before this click; a later run is spared.
+            clicked_at = f"{time.time():.6f}"
+            request = steer_queued_request(key, request_id)
+            if request is None:
+                text = "This message isn't waiting anymore."
+            elif cancel_active_run(key, clicked_at):
+                text = "Stopping the earlier request. I'll answer yours next."
             else:
-                text = "Queued. I'll answer it after the current request."
+                text = "I'll answer yours as soon as the earlier request ends."
             respond(text=text, blocks=[{"type": "section", "text": {"type": "plain_text", "text": text}}],
                     response_type="ephemeral", replace_original=True)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Could not queue or steer the Slack request: %s", exc)
+            logger.warning("Could not steer the Slack request: %s", exc)
+
+    for legacy_action_id in LEGACY_WAITING_ACTION_IDS:
+        @app.action(legacy_action_id)
+        def expire_legacy_choice(ack: Any, respond: Any) -> None:
+            """Tell the requester a 0.4.0 Queue or Steer choice no longer works."""
+            ack()
+            respond(text="This choice has expired. Mention me again to send your message.",
+                    response_type="ephemeral", replace_original=True)
 
     workspace_ids: list[str] = []
 
