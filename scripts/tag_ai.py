@@ -103,6 +103,11 @@ def _version(executable: str) -> str | None:
     return match.group(0) if match else None
 
 
+def this_computer() -> str:
+    """What Tag.app calls this computer: this Mac on macOS, this computer elsewhere."""
+    return "this Mac" if sys.platform == "darwin" else "this computer"
+
+
 def _connection(backend: Backend, state: str, *, installed: bool, version: str | None = None,
                 method: str | None = None, account: str | None = None, detail: str = "",
                 shared: bool = True, actions: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -152,7 +157,7 @@ def _codex_connection(home: Path, executable: str, version: str | None) -> dict[
                            actions=("sign_in",), method="codex", **common)
     if result.returncode == 0:
         text = (result.stdout + result.stderr).lower()
-        account = "API key" if "api key" in text else "Codex sign-in on this Mac" if "chatgpt" in text else "Signed in"
+        account = "API key" if "api key" in text else f"Codex sign-in on {this_computer()}" if "chatgpt" in text else "Signed in"
         return _connection(backend, "connected", method="codex", account=account,
                            actions=("change_account",), **common)
     codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()

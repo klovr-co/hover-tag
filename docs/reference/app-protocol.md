@@ -299,6 +299,13 @@ has `id`, `name`, `kind` (`workspace` or `organization`), `user_id`, and
 `sign_in` asks `slack_login`, then `workspace` again. With no sign-ins at all,
 setup asks `slack_login` first.
 
+`slack_login`'s `sign_in_line` is a one-time `/slackauthticket` line that
+expires after a few minutes; when it does, Slack replies with an error instead
+of a code. Answering `"new_ticket"` (the question's `new_ticket` value) asks
+Slack for a new line, and setup asks `slack_login` again with it. Each line
+accepts three codes; a new line starts over. Setup never relays Slack CLI
+output, which can echo the line or code.
+
 Choosing an organization asks `org_workspace`: `option_ids` are its workspaces'
 `T…` IDs and `manual`, `workspaces` lists `{"id", "name"}`, and `organization`
 is `{"id", "name"}`. `manual` asks `org_workspace_id`, a `text` question for a
@@ -306,12 +313,14 @@ workspace address or ID, which accepts `T…` or an address containing it, such
 as `app.slack.com/client/T…`. Its `error` explains an `E…` organization ID or
 an answer without an ID.
 
-Tag can't list an organization's workspaces yet, so `workspaces` is empty and
-only `manual` is offered. The Slack CLI (4.8) shows that list only inside its
-own prompts while it installs or creates an app, and `slack api auth.teams.list
---team E…` runs without the sign-in's token. Calling Slack directly would mean
-reading the CLI's private credential file, which Tag doesn't do. Clients should
-show the list whenever it isn't empty.
+Setup lists the organization's workspaces with Slack's `auth.teams.list`. The
+Slack CLI (4.8) can't print that list itself, and `slack api auth.teams.list
+--team E…` runs without the sign-in's token, so setup reads the CLI's token for
+that organization from `~/.slack/credentials.json` for this one call. It never
+shows, logs, or saves it. An organization with exactly one workspace asks no
+`org_workspace` question: setup picks that workspace, and Back from the next
+step returns to `workspace`. When Slack can't list them (offline, a lapsed
+sign-in), `workspaces` is empty and only `manual` is offered.
 
 The owner is always the signed-in member: `user_id` for the chosen sign-in, or
 Slack's `auth.test` through the Slack CLI's own authorization. If neither says
@@ -341,7 +350,7 @@ creation. The CLI emits the same fields in JSON; its text summary stays textual.
 `create` makes the app, reported as `{"type": "progress", "step": …, "text": …}`
 events without a `backend`: `create` (Create the Slack app), `picture` (Add the
 picture), `install` (Install in WORKSPACE, or Add it to WORKSPACE for an
-organization), and `connect` (Connect to this Mac).
+organization), and `connect` (Connect to this Mac on macOS, Connect to this computer elsewhere).
 
 ### Your app: `existing_app`, `app_id`, `app_checks`
 

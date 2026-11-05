@@ -31,6 +31,16 @@ if ($PSVersionTable.PSEdition -ne 'Core') {
 }
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
+# Tag.app starts this script from its resource folder, whose path carries the
+# extended-length prefix (\\?\C:\...). Join-Path can't resolve a drive from that
+# form ("the value of argument 'drive' is null"), so use the plain path.
+$TagScriptRoot = $PSScriptRoot
+if ($TagScriptRoot -and $TagScriptRoot.StartsWith('\\?\UNC\')) {
+    $TagScriptRoot = '\\' + $TagScriptRoot.Substring(8)
+} elseif ($TagScriptRoot -and $TagScriptRoot.StartsWith('\\?\')) {
+    $TagScriptRoot = $TagScriptRoot.Substring(4)
+}
+
 function Write-TagProgress([string]$Step) {
     if ($env:TAG_INSTALL_PROGRESS -eq 'jsonl') {
         [Console]::Error.WriteLine('@tag-progress {"schema_version":1,"step":"' + $Step + '"}')
@@ -123,8 +133,13 @@ function Initialize-TagRuntime {
 $runtime = Initialize-TagRuntime
 $python, $uv = $runtime
 if ($RuntimeInfo) {
-    Write-Output $python
-    Write-Output $uv
+    # Windows PowerShell writes redirected output in the console code page,
+    # which garbles a non-ASCII TAG_HOME (C:\Users\Zoë\...). Write UTF-8 bytes;
+    # tag_dependencies.prepare_python reads them as UTF-8.
+    $bytes = (New-Object Text.UTF8Encoding $false).GetBytes("$python`n$uv`n")
+    $stdout = [Console]::OpenStandardOutput()
+    $stdout.Write($bytes, 0, $bytes.Length)
+    $stdout.Flush()
     exit 0
 }
 if ($DependenciesOnly) {
@@ -132,10 +147,10 @@ if ($DependenciesOnly) {
     $previousSkip = $env:TAG_SKIP_MFS_MODEL
     if ($SkipMemoryModel) { $env:TAG_SKIP_MFS_MODEL = '1' }
     try {
-        if (-not $PSScriptRoot -or -not (Test-Path (Join-Path $PSScriptRoot 'requirements-runtime.txt'))) {
+        if (-not $TagScriptRoot -or -not (Test-Path (Join-Path $TagScriptRoot 'requirements-runtime.txt'))) {
             throw '-DependenciesOnly is available only from a Tag source checkout.'
         }
-        $venv = Join-Path $PSScriptRoot '.venv'
+        $venv = Join-Path $TagScriptRoot '.venv'
         $runtimePython = Join-Path $venv 'Scripts/python.exe'
         if (-not (Test-Path $runtimePython)) {
             Write-Host 'Creating Tag runtime...'
@@ -143,10 +158,10 @@ if ($DependenciesOnly) {
             if ($LASTEXITCODE -ne 0) { throw "Tag runtime creation failed ($LASTEXITCODE)" }
         }
         Write-Host 'Installing pinned Tag runtime dependencies...'
-        Invoke-Native { & $uv pip install --python $runtimePython -r (Join-Path $PSScriptRoot 'requirements-runtime.txt') }
+        Invoke-Native { & $uv pip install --python $runtimePython -r (Join-Path $TagScriptRoot 'requirements-runtime.txt') }
         if ($LASTEXITCODE -ne 0) { throw "Tag dependency installation failed ($LASTEXITCODE)" }
         Write-Host 'Preparing the local MFS embedding model...'
-        Invoke-Native { & $runtimePython (Join-Path $PSScriptRoot 'scripts/preload_mfs_model.py') }
+        Invoke-Native { & $runtimePython (Join-Path $TagScriptRoot 'scripts/preload_mfs_model.py') }
         if ($LASTEXITCODE -ne 0) { throw "MFS embedding model preparation failed ($LASTEXITCODE)" }
         Write-Host 'Pinned Tag dependencies are installed.'
     } finally {
@@ -160,10 +175,10 @@ if ($Channel) { $installerArgs += @('--channel', $Channel) }
 if ($BinDir) { $installerArgs += @('--bin-dir', $BinDir) }
 if ($SkipDependencies) { $installerArgs += '--skip-dependencies' }
 if ($SkipMemoryModel) { $installerArgs += '--skip-memory-model' }
-if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'scripts/tag_install.py'))) {
-    if (-not $Version -and -not $Channel) { $installerArgs += @('--source', $PSScriptRoot) }
+if ($TagScriptRoot -and (Test-Path (Join-Path $TagScriptRoot 'scripts/tag_install.py'))) {
+    if (-not $Version -and -not $Channel) { $installerArgs += @('--source', $TagScriptRoot) }
     # The installer writes progress to stderr; never let PowerShell treat that as failure.
-    Invoke-Native { & $python (Join-Path $PSScriptRoot 'scripts/tag_install.py') @installerArgs }
+    Invoke-Native { & $python (Join-Path $TagScriptRoot 'scripts/tag_install.py') @installerArgs }
     if ($LASTEXITCODE -ne 0) { throw "TAG installation failed ($LASTEXITCODE)" }
 } else {
     $tagDownload = Join-Path ([IO.Path]::GetTempPath()) ('tag-bootstrap-' + [guid]::NewGuid())

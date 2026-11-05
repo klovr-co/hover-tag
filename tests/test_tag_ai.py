@@ -107,7 +107,8 @@ class ConnectionTests(Fixture):
     def test_reports_each_state_with_the_action_to_offer(self) -> None:
         cases = [
             ("codex missing", dict(installed=("claude",)), "codex", "not_installed", ["install"], None),
-            ("codex chatgpt", {}, "codex", "connected", ["change_account"], "Codex sign-in on this Mac"),
+            ("codex chatgpt", {}, "codex", "connected", ["change_account"],
+             f"Codex sign-in on {tag_ai.this_computer()}"),
             ("codex api key", dict(codex_status=done(0, "Logged in using an API key")), "codex", "connected",
              ["change_account"], "API key"),
             ("codex signed out", dict(codex_status=done(1)), "codex", "signed_out", ["sign_in"], None),
@@ -124,6 +125,13 @@ class ConnectionTests(Fixture):
                 result = tag_ai.connection(self.home, backend)
                 self.assertEqual((state, actions), (result["state"], result["actions"]))
                 self.assertEqual(account, result["account"])
+
+    def test_codex_sign_in_names_this_computer_as_tag_app_does(self) -> None:
+        for platform, expected in (("darwin", "Codex sign-in on this Mac"), ("win32", "Codex sign-in on this computer"),
+                                   ("linux", "Codex sign-in on this computer")):
+            with self.subTest(platform), patch.object(tag_ai.sys, "platform", platform):
+                self.machine()
+                self.assertEqual(expected, tag_ai.connection(self.home, "codex")["account"])
 
     def test_lapsed_sign_ins_are_expired_not_signed_out(self) -> None:
         (self.root / "codex").mkdir()

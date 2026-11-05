@@ -9,6 +9,7 @@ import { aiArgs, findModel, parseModels, parseStatus, type AIModels, type AIStat
 import type { Bridge, Session } from "../lib/bridge";
 import { effortLabel } from "../lib/home";
 import { choiceText } from "../lib/model";
+import { machine } from "../lib/machine";
 import { useFresh, usePresence, reducedMotion } from "../lib/motion";
 import { initialSetup, quickAnswer, setupReducer } from "../lib/setup";
 import { ModelMenu } from "./AI";
@@ -185,7 +186,7 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
   const at = quickStep(phase, model !== null || answered.current.has("default_model"), (state.creating ?? []).map((s) => s.step));
   const labels: Record<string, string> = {
     model: "Load your models", create: "Create the Slack app", picture: "Add the picture",
-    install: enterprise ? `Add it to ${workspaceName}` : `Install in ${workspaceName}`, connect: "Connect to this Mac", start: `Start ${name}`,
+    install: enterprise ? `Add it to ${workspaceName}` : `Install in ${workspaceName}`, connect: `Connect to this ${machine()}`, start: `Start ${name}`,
   };
   const thinking = level ?? entry?.default_effort ?? null;
   const shown = (model ?? pickedLabel) && choiceText((model ?? pickedLabel)!, thinking);

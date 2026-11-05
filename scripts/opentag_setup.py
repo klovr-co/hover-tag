@@ -189,12 +189,13 @@ def run_slack_cli(arguments: list[str], *, cwd: Path | None = None, interactive:
             environment = dict(os.environ, SLACK_CLI_APP_ICON_PATH=str(icons[0]))
     if interactive and ui.protocol_active():
         # Keep Slack CLI's own prompts and output off the protocol stream.
-        return subprocess.run(command, cwd=cwd, env=environment, check=False,
-                              stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr).returncode
+        return tag_dependencies.run_slack(command, cwd=cwd, env=environment, check=False,
+                                          stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr).returncode
     if interactive:
         return subprocess.run(command, cwd=cwd, env=environment, check=False).returncode
-    completed = subprocess.run(
-        command, cwd=cwd, env=environment, check=False, text=True, capture_output=True
+    completed = tag_dependencies.run_slack(
+        command, cwd=cwd, env=environment, check=False, text=True, capture_output=True,
+        stdin=subprocess.DEVNULL,
     )
     output = safe_cli_output("\n".join(part for part in (completed.stdout, completed.stderr) if part).strip())
     if output and (not quiet or completed.returncode):
@@ -209,8 +210,8 @@ def remote_app_settings(project: Path, app_id: str) -> tuple[bool, str]:
         "--app", app_id, "--skip-update", "--no-color",
     ]
     try:
-        completed = subprocess.run(command, cwd=project, check=False, text=True, capture_output=True,
-                                   stdin=subprocess.DEVNULL, timeout=120)
+        completed = tag_dependencies.run_slack(command, cwd=project, check=False, text=True, capture_output=True,
+                                               stdin=subprocess.DEVNULL, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         return False, "Slack CLI did not respond."
     output = safe_cli_output(completed.stdout or "")
@@ -364,7 +365,7 @@ def authorized_workspaces(output: str) -> list[tuple[str, str]]:
 def list_slack_sign_ins() -> list[dict[str, str | None]]:
     """The Slack CLI's sign-ins on this computer; empty when none can be listed."""
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "auth", "list", "--skip-update", "--no-color"],
             check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30,
         )
@@ -376,7 +377,7 @@ def list_slack_sign_ins() -> list[dict[str, str | None]]:
 def auth_test_member(team_id: str) -> str:
     """Ask Slack who is signed in, through the Slack CLI's own authorization."""
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "api", "auth.test", "--team", team_id,
              "--skip-update", "--no-color"],
             check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=15,
@@ -435,23 +436,54 @@ def ask_text(prompt: str, *, qid: str, default: str = "", error: str | None = No
     return ask(prompt, default or None, qid=qid).strip()
 
 
-def organization_workspaces(enterprise_id: str) -> list[dict[str, str]]:
-    """Workspaces in an organization that Tag can offer to pick from.
+def slack_cli_token(authorization_id: str) -> str:
+    """The Slack CLI's own sign-in token for one organization, or "" when there is none.
 
-    Spike result (Slack CLI 4.8): the CLI lists an organization's workspaces
-    only inside its own prompts while installing or creating an app, and
-    `slack api auth.teams.list --team E…` runs without the sign-in's token
-    (`not_authed`). Calling Slack directly would mean reading the CLI's private
-    credential file, which Tag doesn't do. So there is no safe list yet, and
-    setup offers only "Workspace not listed?". Swap this function when the CLI
-    can print the list on its own.
+    Read only to list the organization's workspaces, which the CLI can't print
+    itself. Never shown, logged or saved.
     """
-    return []
+    try:
+        saved = json.loads((Path.home() / ".slack/credentials.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    entry = saved.get(authorization_id) if isinstance(saved, dict) else None
+    token = entry.get("token") if isinstance(entry, dict) else None
+    return token if isinstance(token, str) and token.startswith("xox") else ""
+
+
+def organization_workspaces(enterprise_id: str) -> list[dict[str, str]]:
+    """Workspaces in an organization that Tag can offer to pick from; empty when Slack can't say.
+
+    The Slack CLI lists them only inside its own prompts, and `slack api
+    auth.teams.list --team E…` runs without the sign-in (`not_authed`, CLI
+    4.8), so ask Slack with the CLI's sign-in instead.
+    """
+    token = slack_cli_token(enterprise_id)
+    workspaces: list[dict[str, str]] = []
+    cursor = ""
+    while token:
+        try:
+            payload = slack_channels.slack_api_post(token, "auth.teams.list",
+                                                    {"limit": "200", **({"cursor": cursor} if cursor else {})})
+        except RuntimeError:  # Offline, a lapsed sign-in or a missing scope: offer the ID field instead.
+            return []
+        for team in payload.get("teams") or []:
+            if isinstance(team, dict) and re.fullmatch(r"T[A-Z0-9]+", str(team.get("id", ""))):
+                workspaces.append({"id": str(team["id"]), "name": str(team.get("name") or team["id"])})
+        cursor = str((payload.get("response_metadata") or {}).get("next_cursor") or "")
+        if not cursor:
+            break
+    return workspaces
 
 
 def choose_org_workspace(organization: dict[str, str | None]) -> slack_identity.WorkspaceSelection:
     enterprise_id, org_name = str(organization["id"]), str(organization["name"])
     workspaces = organization_workspaces(enterprise_id)
+    if len(workspaces) == 1:
+        # Nothing to choose: Back from the next step returns to the workspace list.
+        only = workspaces[0]
+        ui.message(f"✓ {only['name']}, the only workspace in {org_name}")
+        return slack_identity.WorkspaceSelection(only["id"], only["name"], enterprise_id, org_name)
     if not ui.protocol_active():
         ui.message(f"{org_name} is an organization. Pick the one workspace this Tag works in.")
         ui.message("To find its ID, open the workspace in Slack in a browser: the address has app.slack.com/client/T….")
@@ -465,8 +497,9 @@ def choose_org_workspace(organization: dict[str, str | None]) -> slack_identity.
         return slack_identity.WorkspaceSelection(chosen["id"], chosen["name"], enterprise_id, org_name)
     error = None
     while True:
+        # Name the organization here too: Tag.app shows the ID field inside its row.
         team_id, error = parse_workspace_id(ask_text("Workspace address or ID (T…)", qid="org_workspace_id",
-                                                     error=error))
+                                                     error=error, organization={"id": enterprise_id, "name": org_name}))
         if team_id and not (error := settings.validation_error("SLACK_TEAM_ID", team_id)):
             return slack_identity.WorkspaceSelection(team_id, team_id, enterprise_id, org_name)
 
@@ -475,9 +508,11 @@ def slack_sign_in() -> bool:
     """Sign in to Slack through the Slack CLI: the ticket question, or its own prompts in a terminal."""
     if ui.protocol_active():
         return slack_login_with_client()
-    if run_slack_cli(["auth", "login"], interactive=True):
-        ui.message("Slack CLI authorization was not completed. Run tag setup to try again.")
-        return False
+    # The Slack CLI gives up once its sign-in line expires, so offer a new one here.
+    while run_slack_cli(["auth", "login"], interactive=True):
+        ui.message("Slack sign-in didn't finish. Sign-in lines expire after a few minutes.")
+        if not confirm("Get a new sign-in line and try again?", True, qid="slack_new_sign_in_line"):
+            return False
     return True
 
 
@@ -531,12 +566,14 @@ BACK_CLEARS: dict[str, tuple[str, ...]] = {
 SLACK_TICKET_LINE = re.compile(r"(?m)^\s*/slackauthticket\s+(\S+)\s*$")
 
 
-def slack_login_with_client() -> bool:
-    """Slack CLI sign-in without a terminal: the client shows the one-time
-    ticket line, the operator sends it in Slack, and returns Slack's code."""
-    slack = shutil.which("slack") or "slack"
+# Answering the slack_login question with this asks Slack for a fresh sign-in line.
+NEW_SLACK_TICKET = "new_ticket"
+
+
+def request_slack_ticket(slack: str) -> str:
+    """Start a Slack CLI sign-in and return its one-time ticket."""
     try:
-        started = subprocess.run(
+        started = tag_dependencies.run_slack(
             [slack, "auth", "login", "--no-prompt", "--skip-update", "--no-color"],
             check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60,
         )
@@ -545,14 +582,29 @@ def slack_login_with_client() -> bool:
     match = SLACK_TICKET_LINE.search((started.stdout or "") + "\n" + (started.stderr or ""))
     if not match:
         raise RuntimeError("Slack CLI did not return a sign-in line")
-    ticket = match.group(1)
-    for _attempt in range(3):
-        code = ui.ask_client("slack_login", "Sign in to Slack", sign_in_line=f"/slackauthticket {ticket}", qid="slack_login")
+    return match.group(1)
+
+
+def slack_login_with_client() -> bool:
+    """Slack CLI sign-in without a terminal: the client shows the one-time
+    ticket line, the operator sends it in Slack, and returns Slack's code.
+    Sign-in lines expire, so answering ``"new_ticket"`` asks for a fresh one."""
+    slack = shutil.which("slack") or "slack"
+    ticket = request_slack_ticket(slack)
+    attempts = 0
+    while attempts < 3:  # Codes per sign-in line; a new line starts over.
+        code = ui.ask_client("slack_login", "Sign in to Slack", sign_in_line=f"/slackauthticket {ticket}",
+                             new_ticket=NEW_SLACK_TICKET, qid="slack_login")
+        if code == NEW_SLACK_TICKET:
+            ticket, attempts = request_slack_ticket(slack), 0
+            ui.message("Here's a new sign-in line. Send it in Slack, then click Confirm.")
+            continue
+        attempts += 1
         if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_-]{4,128}", code.strip()):
             ui.message("That doesn't look like the code Slack shows. Copy it again.")
             continue
         try:
-            finished = subprocess.run(
+            finished = tag_dependencies.run_slack(
                 [slack, "auth", "login", "--ticket", ticket, "--challenge", code.strip(),
                  "--skip-update", "--no-color"],
                 check=False, capture_output=True, stdin=subprocess.DEVNULL, timeout=60,
@@ -563,7 +615,8 @@ def slack_login_with_client() -> bool:
         if finished.returncode == 0:
             ui.commit()  # Signed in to Slack: Back can't undo that.
             return True
-        ui.message("Slack didn't accept that code. Check it and try again.")
+        ui.message("Slack didn't accept that code. If Slack showed an error instead of a code, "
+                   "the sign-in line expired: get a new one and try again.")
     return False
 
 
@@ -668,9 +721,9 @@ def parse_local_path(value: str) -> Path | None:
 def slack_cli_supports_icon_upload() -> bool:
     """Require the first Slack CLI release with stable non-hosted app icons."""
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "version", "--skip-update", "--no-color"],
-            check=False, text=True, capture_output=True, timeout=15,
+            check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -1199,7 +1252,7 @@ def slack_cli_apps(project: Path, team_id: str) -> dict[str, str]:
     if not any((project / ".slack" / name).is_file() for name in ("apps.json", "apps.dev.json")):
         return {}
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "app", "list", "--team", team_id, "--skip-update", "--no-color"],
             cwd=project, check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30,
         )
@@ -1744,6 +1797,10 @@ def guided_setup(
             # Until Slack is connected, a resumed setup starts at Your Tag with
             # its saved answers. Setups from before this order, paused after
             # choosing a workspace, start there too when the Tag isn't named yet.
+            # Back to a later step after signing in to Slack can't replay the
+            # name, which is saved already: don't send the operator to Your Tag.
+            if app_path and ui.going_back_past("profile"):
+                profile_done = True
             if not has_app and (ui.going_back_to("profile") or (
                     not profile_done and (not values.get("SLACK_TEAM_ID") or not app_path))):
                 show(1, "Meet your new Tag", "Your progress is saved. Ctrl-C pauses setup.")

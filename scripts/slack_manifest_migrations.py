@@ -24,9 +24,10 @@ try:
     import slack_credentials
     import tag_config as settings
     import tag_credentials
+    import tag_dependencies
 except ImportError:
     from scripts import slack_identity, slack_channels, slack_app_create, slack_credentials, tag_config as settings
-    from scripts import tag_credentials
+    from scripts import tag_credentials, tag_dependencies
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,7 +132,7 @@ def _json_output(output: str) -> dict:
 
 def _run(command: list[str], *, cwd: Path, capture: bool = True) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(
+        return tag_dependencies.run_slack(
             command,
             cwd=cwd,
             check=False,

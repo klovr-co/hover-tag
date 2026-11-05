@@ -134,6 +134,10 @@ MAX_OUTPUT_ARTIFACTS = 10
 OUTPUT_ARTIFACT_MANIFEST_PREFIX = ".opentag-output-artifacts-"
 # Routines are checked against the wall clock this often, so sleep and restarts don't matter.
 ROUTINE_CHECK_SECONDS = 20
+# A running routine notices a pause or removal within this long, and stops.
+ROUTINE_WITHDRAW_CHECK_SECONDS = 2.0
+# Stopping Tag ends the coding agent a moment before the bridge hears of it.
+ROUTINE_SHUTDOWN_GRACE_SECONDS = 3.0
 ROUTINE_FAILURE_TEXT = {
     "authentication_failure": "The coding agent isn't signed in.",
     "missing_executable": "The coding agent isn't installed on this computer.",
@@ -5368,6 +5372,10 @@ def create_app(
             workspace_ids.append(str(client.auth_test().get("team_id") or ""))
         return workspace_ids[0]
 
+    # Set when the bridge is asked to stop, so routine runs it cuts short don't report a failure.
+    shutdown_requested = threading.Event()
+    app.tag_shutdown_requested = shutdown_requested
+
     def post_routine_root(client: Any, routine: dict[str, Any], text: str,
                           blocks: list[dict[str, Any]] | None = None) -> str:
         posted = client.chat_postMessage(channel=routine["channel"], text=text, mrkdwn=True, blocks=blocks,
@@ -5447,6 +5455,7 @@ def create_app(
         limit_hit: list[str] = []
         error_codes: list[str] = []
         cancelled: list[bool] = []
+        stopped_because: list[str] = []
         activity_run_id: str | None = None
         if rich_events_selected(request_backend):
             try:
@@ -5515,8 +5524,21 @@ def create_app(
                 except OSError:
                     pass
 
+        def stop_if_withdrawn(done: threading.Event) -> None:
+            # Pausing or removing the routine stops the run, as a stop in Slack would, so it spends no more.
+            # Once withdrawn, keep waiting for a run that is still starting, so it can't slip through.
+            while not done.wait(ROUTINE_WITHDRAW_CHECK_SECONDS):
+                if (reason := withdrawn()) is not None and (run := active_run(run_key)) is not None:
+                    # Kept for the record: the routine may be resumed before the run ends.
+                    stopped_because.append(reason)
+                    run.cancel()
+                    return
+
         output_manifest = default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
         answer, succeeded, finished = "", False, False
+        run_done = threading.Event()
+        threading.Thread(target=stop_if_withdrawn, args=(run_done,), name=f"routine-watch-{routine['id']}",
+                         daemon=True).start()
         try:
             with tempfile.TemporaryDirectory(prefix="slack-routine-", dir=tag_temp_dir()) as raw_dir:
                 attachment_dir = Path(raw_dir)
@@ -5532,16 +5554,26 @@ def create_app(
                     run_limits={"max_turns": limits["max_turns"], "max_budget_usd": limits["max_budget_usd"]},
                     on_error=capture_error, routine_id=routine["id"], on_cancelled=lambda: cancelled.append(True),
                 )
+                run_done.set()
                 finished = True
-                finish_activity("completed" if succeeded else "failed")
                 extra = {"tools_used": tools_used or None, "cost_usd": usage.get("cost_usd"),
                          "tokens": usage.get("tokens"), "activity_run_id": activity_run_id}
-                if (reason := withdrawn()) is not None:
+                if (reason := withdrawn() or next(iter(stopped_because), None)) is not None:
+                    finish_activity("completed" if succeeded else "failed")
                     return record("cancelled", reason, **extra)
+                category = classify_failure(answer, error_codes[-1] if error_codes else None).category
+                # Tag is stopping and took the coding agent with it: that isn't the routine's failure.
+                # A reply that did finish still posts, and a rate-limited run still gets its retry.
+                retry_later = not succeeded and category == "rate_limit" and trigger != "retry"
+                interrupted = (not succeeded and not cancelled and not retry_later
+                               and shutdown_requested.wait(ROUTINE_SHUTDOWN_GRACE_SECONDS))
+                finish_activity("interrupted" if interrupted else "completed" if succeeded else "failed")
+                if interrupted:
+                    return record("interrupted", "Tag stopped during this run, so nothing was posted. "
+                                                 "It wasn't run again, so nothing posts twice.", **extra)
                 if cancelled and not limit_hit:
                     # Someone stopped it in Slack: not a failure, and nothing more to say.
                     return record("cancelled", "Stopped by someone in Slack.", **extra)
-                category = classify_failure(answer, error_codes[-1] if error_codes else None).category
                 # Limits come from error codes and only for runs that failed: a reply that
                 # merely talks about turns or budgets is still a reply.
                 if not succeeded and (limit_hit or "error_max_budget_usd" in error_codes):
@@ -5603,6 +5635,7 @@ def create_app(
                 return record(outcome, f"{diagnostic} Reference {reference}.", slack_ts=root.get("ts"),
                               error_reference=reference, **extra)
         finally:
+            run_done.set()
             if not finished:
                 finish_activity("failed")
             output_manifest.unlink(missing_ok=True)
@@ -5873,7 +5906,7 @@ def main() -> None:
     app_token = require_env("SLACK_APP_TOKEN")
     connection = SocketConnection(lambda: SocketModeHandler(app, app_token))
     session_journal.reconcile(app.client, app.logger)
-    shutdown_requested = threading.Event()
+    shutdown_requested = getattr(app, "tag_shutdown_requested", None) or threading.Event()
     install_shutdown_handlers(shutdown_requested)
     # Cosmetic profile refresh must never block Socket Mode heartbeats or tasks.
     try:

@@ -118,6 +118,15 @@ def going_back_to(qid: str) -> bool:
     return bool(_target and _target[0] == qid)
 
 
+def going_back_past(qid: str) -> bool:
+    """Whether Back is returning to a later question while ``qid``'s answer can't be replayed.
+
+    A point of no return, such as signing in to Slack, ends Back's history, so
+    the replay no longer holds earlier answers. Their saved values still stand.
+    """
+    return bool(_target and _target[0] != qid and all(item != qid for item, _ in _replay))
+
+
 def start_replay(replay: list[tuple[str, object]], target: tuple[str, object]) -> None:
     global _target
     _history.clear()

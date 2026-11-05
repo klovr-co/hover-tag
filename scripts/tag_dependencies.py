@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -24,20 +25,73 @@ SLACK_ARTIFACTS = {
     ("linux", "x86_64"): ("linux_amd64", "533ebc242561a79c6aaf238c3417ce113d1257ace80cf90f1e5f852d8ec9ca7b"),
     ("win32", "x86_64"): ("windows_64-bit", "ccf7ac1fcdbf39cdbd66cbc04d3018c5c293b70e489a85e07b140693377c6d24"),
 }
+# Slack publishes no Windows ARM64 build; Windows 11 on ARM runs the x64 one
+# under emulation, and ensure_slack still checks that it actually runs.
+SLACK_ARTIFACTS[("win32", "arm64")] = SLACK_ARTIFACTS[("win32", "x86_64")]
 
 
 def slack_executable() -> str:
     return "slack.exe" if sys.platform == "win32" else "slack"
 
 
-def slack_compatible(command: str | Path) -> bool:
+def host_machine() -> str:
+    return {"aarch64": "arm64", "amd64": "x86_64"}.get(platform.machine().lower(), platform.machine().lower())
+
+
+SLACK_CONSOLE_HOST = Path(__file__).resolve().with_name("slack_console_host.py")
+
+
+def slack_console_hosted() -> bool:
+    """Whether captured Slack CLI runs go through slack_console_host.py.
+
+    On Windows on ARM, the Slack CLI asks the terminal for its background color at
+    startup and waits for the reply with no working timeout. A console with no
+    window, such as the one Tag.app's CREATE_NO_WINDOW gives it, never replies, so
+    the CLI hangs. With no console at all it doesn't ask, but then every hook it
+    runs through PowerShell opens a new console window. The host gives it a
+    windowless console that replies.
+    """
+    return sys.platform == "win32" and host_machine() == "arm64"
+
+
+def run_slack(command: list, **options) -> subprocess.CompletedProcess:
+    """``subprocess.run`` for every Slack CLI call whose output Tag captures.
+
+    In a terminal, interactive sign-in runs the CLI directly instead, so it keeps
+    the operator's terminal.
+    """
+    if slack_console_hosted():
+        # The base interpreter, not a venv's launcher: the host needs only the
+        # standard library, and the launcher's job would end whatever the CLI
+        # leaves running on purpose (a browser) when the host finishes.
+        python = getattr(sys, "_base_executable", None) or sys.executable
+        command = [python, "-I", str(SLACK_CONSOLE_HOST), *map(str, command)]
+        options["creationflags"] = options.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
+    return subprocess.run(command, **options)
+
+
+def slack_problem(command: str | Path) -> str | None:
+    """Why the Slack CLI at ``command`` is unusable, or None when it runs a supported 4.x."""
     try:
-        result = subprocess.run([str(command), "version", "--skip-update", "--no-color"],
-                                capture_output=True, text=True, timeout=20, check=False)
-        match = re.search(r"\b(?:v)?(\d+)\.(\d+)\.(\d+)\b", result.stdout)
-        return result.returncode == 0 and bool(match) and (4, 7, 0) <= tuple(map(int, match.groups())) < (5, 0, 0)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+        result = run_slack([str(command), "version", "--skip-update", "--no-color"],
+                           capture_output=True, text=True, timeout=20, check=False,
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return "it did not finish `slack version` within 20 seconds"
+    except OSError as error:
+        return f"it could not start ({error.strerror or error})"
+    if result.returncode:
+        return f"`slack version` exited with code {result.returncode}"
+    match = re.search(r"\b(?:v)?(\d+)\.(\d+)\.(\d+)\b", result.stdout)
+    if not match:
+        return f"`slack version` printed no version: {result.stdout.strip()[:120]!r}"
+    if not (4, 7, 0) <= tuple(map(int, match.groups())) < (5, 0, 0):
+        return f"it is version {'.'.join(match.groups())}, not 4.7+ (4.x)"
+    return None
+
+
+def slack_compatible(command: str | Path) -> bool:
+    return slack_problem(command) is None
 
 
 def download_verified(url: str, destination: Path, digest: str) -> None:
@@ -61,8 +115,7 @@ def ensure_slack(home: Path) -> Path:
     existing = shutil.which("slack")
     if existing and slack_compatible(existing):
         return Path(existing).resolve()
-    machine = {"aarch64": "arm64", "amd64": "x86_64"}.get(platform.machine().lower(), platform.machine().lower())
-    target = SLACK_ARTIFACTS.get((sys.platform, machine))
+    target = SLACK_ARTIFACTS.get((sys.platform, host_machine()))
     if target is None:
         raise RuntimeError("Automatic Slack CLI setup is unavailable on this platform; install Slack CLI 4.7+ (4.x) and retry")
     name = slack_executable()
@@ -82,10 +135,27 @@ def ensure_slack(home: Path) -> Path:
         candidate = temporary / name
         extract_executable(archive, name, candidate)
         candidate.chmod(0o755)
-        if not slack_compatible(candidate):
-            raise RuntimeError("Downloaded Slack CLI cannot run on this machine; retry after checking OS compatibility")
-        os.replace(candidate, destination)
+        if problem := slack_problem(candidate):
+            raise RuntimeError(f"Downloaded Slack CLI cannot run on this machine: {problem}. "
+                               "Retry after checking OS compatibility")
+        publish(candidate, destination)
     return destination
+
+
+def publish(candidate: Path, destination: Path, attempts: int = 20) -> None:
+    """Move a checked executable into place.
+
+    Windows keeps a just-run executable open for a moment (antivirus scans,
+    process teardown), so the move can fail with WinError 32. Retry briefly.
+    """
+    for attempt in range(attempts):
+        try:
+            os.replace(candidate, destination)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.25)
 
 
 def extract_executable(archive: Path, name: str, candidate: Path) -> None:
@@ -121,7 +191,7 @@ def prepare_python(source: Path, home: Path) -> tuple[Path, Path]:
     else:
         command = ["sh", str(source / "install.sh"), "--runtime-info"]
     result = subprocess.run(command, env=dict(os.environ, TAG_HOME=str(home)), stdout=subprocess.PIPE,
-                            text=True, check=False)
+                            encoding="utf-8", check=False)
     if result.returncode:
         raise RuntimeError("Tag runtime preparation failed; check the download error above and retry")
     python, uv = result.stdout.strip().splitlines()

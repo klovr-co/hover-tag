@@ -13,7 +13,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import opentag_setup
+from scripts import opentag_setup, tag_dependencies
 from scripts.opentag_setup import (
     ask_required,
     main,
@@ -724,7 +724,42 @@ class OtherTagsTests(unittest.TestCase):
                     "name": "Tag Dev", "tag": "launch", "team": "T0KLOVR", "workspace": "T0KLOVR"}})
 
 
+class OrganizationWorkspacesTests(unittest.TestCase):
+    def test_organization_workspaces_come_from_slack_with_the_cli_sign_in(self):
+        pages = [{"ok": True, "teams": [{"id": "T0HOVERENG", "name": "Hover Engineering"}, {"id": "E0HOVER"}],
+                  "response_metadata": {"next_cursor": "next"}},
+                 {"ok": True, "teams": [{"id": "T0HOVEROPS", "name": "Hover Ops"}], "response_metadata": {"next_cursor": ""}}]
+        with tempfile.TemporaryDirectory() as directory, patch("pathlib.Path.home", return_value=Path(directory)), \
+                patch.object(opentag_setup.slack_channels, "slack_api_post", side_effect=pages) as post:
+            (Path(directory) / ".slack").mkdir()
+            (Path(directory) / ".slack/credentials.json").write_text(
+                json.dumps({"E0HOVER": {"token": "xoxe.xoxp-1-secret", "team_domain": "hover"}}), encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                workspaces = opentag_setup.organization_workspaces("E0HOVER")
+        self.assertEqual(workspaces, [{"id": "T0HOVERENG", "name": "Hover Engineering"}, {"id": "T0HOVEROPS", "name": "Hover Ops"}])
+        self.assertEqual([c.args[:2] for c in post.call_args_list], [("xoxe.xoxp-1-secret", "auth.teams.list")] * 2)
+        self.assertEqual(post.call_args_list[1].args[2]["cursor"], "next")
+        self.assertNotIn("secret", output.getvalue())
+
+    def test_organization_workspaces_fall_back_to_the_id_field(self):
+        with tempfile.TemporaryDirectory() as directory, patch("pathlib.Path.home", return_value=Path(directory)):
+            self.assertEqual(opentag_setup.organization_workspaces("E0HOVER"), [])  # Not signed in
+            (Path(directory) / ".slack").mkdir()
+            (Path(directory) / ".slack/credentials.json").write_text(json.dumps({"E0HOVER": {"token": "xoxp-1"}}), encoding="utf-8")
+            with patch.object(opentag_setup.slack_channels, "slack_api_post",
+                              side_effect=opentag_setup.slack_channels.SlackChannelError("Slack rejected the credential (invalid_auth)")):
+                self.assertEqual(opentag_setup.organization_workspaces("E0HOVER"), [])
+            self.assertEqual(opentag_setup.organization_workspaces("E0OTHER"), [])
+
+
 class WorkspaceAndOwnerTests(unittest.TestCase):
+    def setUp(self):
+        # Never this computer's own Slack sign-in.
+        token = patch.object(opentag_setup, "slack_cli_token", return_value="")
+        token.start()
+        self.addCleanup(token.stop)
+
     LISTING = ("\x1b[32mKlovr (Team ID: T0KLOVR)\x1b[0m\nUser ID: U01MAYA\nUser Name: maya\n"
                "Authorization Level: Workspace\n\nHover Sandbox (Team ID: E0HOVER)\nUser ID: W01MAYA\n"
                "Authorization Level: Organization\nBroken (Team ID: unknown)\nUser ID: UNOPE\n")
@@ -735,7 +770,8 @@ class WorkspaceAndOwnerTests(unittest.TestCase):
             {"id": "E0HOVER", "name": "Hover Sandbox", "kind": "organization", "user_id": "W01MAYA", "user_name": None},
         ])
 
-    def test_owner_comes_from_the_sign_in_then_auth_test_then_stops(self):
+    @patch.object(tag_dependencies, "slack_console_hosted", return_value=False)  # Windows on ARM: plain argv
+    def test_owner_comes_from_the_sign_in_then_auth_test_then_stops(self, _hosted):
         self.assertEqual(opentag_setup.signed_in_member("T0KLOVR", SIGN_INS), "U01MAYA")
         unknown = [{**SIGN_INS[0], "user_id": None}]
         auth = json.dumps({"ok": True, "team_id": "T0KLOVR", "user_id": "U02MAYA"})
@@ -963,6 +999,7 @@ class GuidedSetupFlowTests(unittest.TestCase):
             patch.object(opentag_setup.tag_dependencies, "ensure_slack", return_value=Path("/bin/slack")),
             patch.object(opentag_setup.tag_dependencies, "activate_slack"),
             patch.object(opentag_setup, "list_slack_sign_ins", return_value=SIGN_INS),
+            patch.object(opentag_setup, "slack_cli_token", return_value=""),
             patch.object(opentag_setup, "choose_slack_app", side_effect=fake_create),
             patch.object(opentag_setup, "connect_app_credentials", side_effect=fake_credentials),
             patch.object(opentag_setup, "validate_slack_identity", return_value={}),
@@ -1043,6 +1080,45 @@ class GuidedSetupFlowTests(unittest.TestCase):
         values = opentag_setup.settings.load_config(self.config)
         self.assertEqual((values["SLACK_ENTERPRISE_ID"], values["SLACK_ALLOWED_USER_IDS"]), ("E0HOVER", "W01MAYA"))
 
+    def test_the_workspace_id_question_names_its_organization(self):
+        # Tag.app shows the ID field inside the organization's row, found by this ID.
+        replies = [*self.NEW_TAG[:2], answer("E0HOVER"), answer("manual"), answer("T0HOVERENG"), answer("create"), answer([])]
+        client = self.run_setup(replies)
+        asked = {q["id"]: q for q in client.questions()}
+        organization = {"id": "E0HOVER", "name": "Hover Sandbox"}
+        self.assertEqual(asked["org_workspace"]["organization"], organization)
+        self.assertEqual(asked["org_workspace_id"]["organization"], organization)
+        self.assertEqual(self.created, ["T0HOVERENG"])
+
+    def test_an_organization_with_one_workspace_skips_the_choice(self):
+        only = [{"id": "T0HOVERENG", "name": "Hover Engineering"}]
+        replies = [*self.NEW_TAG[:2], answer("E0HOVER"), {"back": True}, answer("E0HOVER"), answer("create"), answer([])]
+        with patch.object(opentag_setup, "organization_workspaces", return_value=only), Client(replies) as client:
+            with self.assertRaises(opentag_setup.ui.GoBack) as raised:
+                opentag_setup.guided_setup(self.config, start_services=False)
+            # Back from the recap returns to the workspace list, not to a choice that picks itself again.
+            self.assertEqual(raised.exception.target, ("workspace", "E0HOVER"))
+            values = opentag_setup.settings.load_config(self.config)
+            opentag_setup.settings.save_config(self.config, {
+                key: value for key, value in values.items() if key not in opentag_setup.BACK_CLEARS["workspace"]})
+            opentag_setup.ui.start_replay(raised.exception.replay, raised.exception.target)
+            self.assertEqual(opentag_setup.guided_setup(self.config, start_services=False), 0)
+        self.assertEqual([q["id"] for q in client.questions()],
+                         ["profile", "default_model", "workspace", "approve_setup", "workspace", "approve_setup", "channels"])
+        recap = client.questions()[5]["recap"]
+        self.assertEqual((recap["workspace"]["id"], recap["workspace"]["name"], recap["workspace"]["organization"]),
+                         ("T0HOVERENG", "Hover Engineering", {"id": "E0HOVER", "name": "Hover Sandbox"}))
+        self.assertEqual(self.created, ["T0HOVERENG"])
+
+    def test_an_organization_with_several_workspaces_lists_them(self):
+        listed = [{"id": "T0HOVERENG", "name": "Hover Engineering"}, {"id": "T0HOVEROPS", "name": "Hover Ops"}]
+        replies = [*self.NEW_TAG[:2], answer("E0HOVER"), answer("T0HOVEROPS"), answer("create"), answer([])]
+        with patch.object(opentag_setup, "organization_workspaces", return_value=listed):
+            client = self.run_setup(replies)
+        org = {q["id"]: q for q in client.questions()}["org_workspace"]
+        self.assertEqual((org["option_ids"], org["workspaces"]), (["T0HOVERENG", "T0HOVEROPS", "manual"], listed))
+        self.assertEqual(self.created, ["T0HOVEROPS"])
+
     def test_back_from_the_recap_replays_earlier_answers_and_asks_the_workspace(self):
         replies = [*self.NEW_TAG[:3], {"back": True}, answer("T0KLOVR"), answer("create"), answer([])]
         with Client(replies) as client:
@@ -1060,6 +1136,44 @@ class GuidedSetupFlowTests(unittest.TestCase):
                                "approve_setup", "channels"])
         self.assertEqual(client.questions()[4]["default"], 0)
         self.assertEqual(opentag_setup.settings.load_config(self.config)["SLACK_ALLOWED_USER_IDS"], "U01MAYA")
+
+    def test_back_in_an_organization_after_signing_in_stays_at_the_workspace(self):
+        # Signing in to Slack ends Back's history, as slack_login_with_client does.
+        def signed_in():
+            opentag_setup.ui.commit()
+            return SIGN_INS
+        replies = [*self.NEW_TAG[:2], answer("E0HOVER"), {"back": True},
+                   answer("E0HOVER"), answer("manual"), answer("T0HOVERENG"), answer("create"), answer([])]
+        with patch.object(opentag_setup, "list_slack_sign_ins", side_effect=signed_in), Client(replies) as client:
+            with self.assertRaises(opentag_setup.ui.GoBack) as raised:
+                opentag_setup.guided_setup(self.config, start_services=False)
+            self.assertEqual(raised.exception.replay, [])
+            values = opentag_setup.settings.load_config(self.config)
+            opentag_setup.settings.save_config(self.config, {
+                key: value for key, value in values.items() if key not in opentag_setup.BACK_CLEARS["workspace"]})
+            opentag_setup.ui.start_replay(raised.exception.replay, raised.exception.target)
+            self.assertEqual(opentag_setup.guided_setup(self.config, start_services=False), 0)
+        ids = [q["id"] for q in client.questions()]
+        # Not back to Your Tag: the name was saved before signing in.
+        self.assertEqual(ids, ["profile", "default_model", "workspace", "org_workspace", "workspace",
+                               "org_workspace", "org_workspace_id", "approve_setup", "channels"])
+        self.assertEqual(client.questions()[4]["default"], 1)
+        self.assertEqual(self.created, ["T0HOVERENG"])
+        values = opentag_setup.settings.load_config(self.config)
+        self.assertEqual((values["OPENTAG_BOT_NAME"], values["SLACK_TEAM_ID"]), ("Maya's Tag", "T0HOVERENG"))
+
+    def test_back_to_your_tag_after_signing_in_still_asks_for_the_name(self):
+        def signed_in():
+            opentag_setup.ui.commit()
+            return SIGN_INS
+        with patch.object(opentag_setup, "list_slack_sign_ins", side_effect=signed_in), \
+                Client([*self.NEW_TAG[:2]]) as client:
+            with self.assertRaises(opentag_setup.ui.Paused):
+                opentag_setup.guided_setup(self.config, start_services=False)
+            opentag_setup.ui.start_replay([], ("profile", {"name": "Maya's Tag", "description": ""}))
+            with self.assertRaises(opentag_setup.ui.Paused):
+                opentag_setup.guided_setup(self.config, start_services=False)
+        self.assertEqual([q["id"] for q in client.questions()], ["profile", "default_model", "workspace", "profile"])
 
     def test_owner_unknown_stops_without_guessing(self):
         unknown = [{**SIGN_INS[0], "user_id": None}]

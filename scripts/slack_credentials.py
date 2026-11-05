@@ -14,8 +14,9 @@ try:
     import slack_identity
     import slack_app_create
     import tag_config as settings
+    import tag_dependencies
 except ImportError:
-    from scripts import slack_identity, slack_app_create, tag_config as settings
+    from scripts import slack_identity, slack_app_create, tag_config as settings, tag_dependencies
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -93,7 +94,7 @@ def receive(project: Path, team_id: str, app_id: str, *, enterprise_id: str = ""
         }
         environment["TAG_SLACK_HANDOFF_FILE"] = str(destination)
         try:
-            result = subprocess.run(
+            result = tag_dependencies.run_slack(
                 [slack, "deploy", "--team", authorization_id, "--app", app_id, *grant,
                  "--hide-triggers", "--skip-update", "--no-color"],
                 cwd=handoff, env=environment, input="", capture_output=True, text=True,

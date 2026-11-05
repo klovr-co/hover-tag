@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
 import { compatibility, isDraft, parseJSON, parseList, status, type Group, type VersionInfo } from "./lib/protocol";
 import { setEmbedding } from "./lib/memory";
+import { setPlatform } from "./lib/machine";
 import { checkUpdate, initialUpdate, installUpdate, updateReducer, useDeferral } from "./lib/updates";
 import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
@@ -103,6 +104,7 @@ export function App() {
     void bridge().then(async (b) => {
       const i = await b.info();
       if (!live) return;
+      setPlatform(i.platform);
       setApi(b);
       setInfo(i);
       setScreen(i.cli ? { name: "home" } : { name: "welcome" });

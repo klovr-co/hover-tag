@@ -12,10 +12,12 @@ agent before claiming a release qualified for it. Hosted operation, enterprise p
 and production-grade sandboxing are out of scope.
 
 The canonical source repository is <https://github.com/klovr-co/hover-tag>. `VERSION`
-selects the current release line (`v0.4.0-alpha`). Eligible merges publish
-monotonically increasing candidates such as `v0.4.0-alpha.1` and
-`v0.4.0-alpha.2`. Alpha and beta releases are GitHub prereleases and remain
-opt-in. The previous line published `v0.3.0-alpha` and `v0.3.0-beta`
+selects the current release line (`v0.4.0`). While `VERSION` names an alpha
+or beta line, eligible merges publish monotonically increasing candidates such
+as `v0.4.0-alpha.1` and `v0.4.0-alpha.2`. While it names a stable version,
+unlabeled merges publish none. Alpha and beta releases are GitHub prereleases
+and remain opt-in. The 0.4 line published `v0.4.0-alpha` candidates before
+stable `v0.4.0`. Earlier lines published `v0.3.0-alpha` and `v0.3.0-beta`
 candidates before stable `v0.3.0`, and `v0.2.0-alpha` and `v0.2.0-beta`
 candidates before stable `v0.2.0`.
 
@@ -233,4 +235,6 @@ signed with a new key; people must download Tag.app again once.
 Before a stable release, qualify
 Tag.app on each platform: first-run install, adding a Tag, start and stop from
 the window and the tray, Keep Tags running across a logout, upgrade, and an
-app update from the previous release.
+app update from the previous release. On Windows, follow
+[Qualifying Tag.app on Windows](docs/testing/windows-tag-app-qualification.md)
+and record the result in the release evidence.

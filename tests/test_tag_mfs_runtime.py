@@ -34,6 +34,23 @@ class RuntimeTests(unittest.TestCase):
             tag_config.save_config(path, ready)
             self.assertEqual(tag_mfs_runtime.active(self.shared, self.process), expected)
 
+    def test_identity_accepts_the_server_running_under_a_windows_venv_launcher(self):
+        # A Windows venv's python.exe runs the real interpreter as a child, so the
+        # server reports the child's PID rather than the one Tag recorded.
+        server = SimpleNamespace(pid=456, cmdline=lambda: ["python", "/release/scripts/tag_mfs_server.py", "run"])
+        other = SimpleNamespace(pid=789, cmdline=lambda: ["python", "unrelated.py"])
+        launcher = SimpleNamespace(pid=123, cmdline=self.process.cmdline, children=lambda: [other, server])
+        tag_config.save_config(self.shared / "mfs.json", {"slack_runtime_version": tag_mfs_runtime.VERSION, "instance_id": "new"})
+        path = self.shared / "slack-runtime-ready-v1.json"
+        for pid, expected in ((456, True), (789, False), (999, False)):
+            tag_config.save_config(path, {"version": tag_mfs_runtime.VERSION, "pid": pid, "instance_id": "new"})
+            self.assertEqual(tag_mfs_runtime.active(self.shared, launcher), expected)
+
+        def gone():
+            raise ProcessLookupError("launcher exited")
+        tag_config.save_config(path, {"version": tag_mfs_runtime.VERSION, "pid": 456, "instance_id": "new"})
+        self.assertFalse(tag_mfs_runtime.active(self.shared, SimpleNamespace(pid=123, cmdline=self.process.cmdline, children=gone)))
+
     def test_old_managed_runtime_is_migrated_once_and_verified_before_checkpoint(self):
         running, modern = True, False
         starts = []

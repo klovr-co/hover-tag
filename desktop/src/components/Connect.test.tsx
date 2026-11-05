@@ -159,6 +159,43 @@ it("reloads pictures replaced at the same path and keeps the selected picture in
   expect(pictures.filter((src) => src === selected)).toHaveLength(2);
 });
 
+describe("A workspace in an organization", () => {
+  const org = { id: "E0LAB", name: "Hover Tag Lab" };
+  const workspace = { id: "workspace", kind: "choose", prompt: "Which workspace?", options: ["Hover Tag Lab (organization)", "Sign in to another workspace", "Save and exit"],
+    option_ids: ["E0LAB", "sign_in", "exit"], workspaces: [{ id: "E0LAB", name: "Hover Tag Lab", kind: "organization", user_id: "U1", user_name: null }], can_go_back: true };
+  const orgWorkspace = { id: "org_workspace", kind: "choose", prompt: "Which workspace in Hover Tag Lab?", options: ["Workspace not listed?"],
+    option_ids: ["manual"], workspaces: [], organization: org, can_go_back: true };
+  const orgWorkspaceId = { id: "org_workspace_id", kind: "text", prompt: "Workspace address or ID (T…)", default: "", error: null, can_go_back: true };
+
+  // Setup from older releases leaves the organization off the ID question; the field must still show.
+  for (const [label, idQuestion] of [["named", { ...orgWorkspaceId, organization: org }], ["left out", orgWorkspaceId]] as const) {
+    it(`takes the workspace ID inside the organization when setup has it ${label}`, async () => {
+      const api = demoBridge();
+      const sent: unknown[] = [];
+      let emit!: (line: string) => void;
+      const ask = (question: object) => act(() => emit(JSON.stringify({ type: "question", ...question })));
+      api.setup = async (_args, onLine) => {
+        emit = onLine;
+        return { send: (message) => {
+          sent.push(message);
+          const answer = (message as { answer?: unknown }).answer;
+          if (answer === "E0LAB") setTimeout(() => ask(orgWorkspace), 0);
+          if (answer === "manual") setTimeout(() => ask(idQuestion), 0);
+        }, stop: vi.fn() };
+      };
+      render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+      ask(workspace);
+      fireEvent.click(await screen.findByRole("option", { name: /Hover Tag Lab/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "Workspace not listed?" }));
+      const field = await screen.findByPlaceholderText("Workspace address or ID (T…)");
+      fireEvent.change(field, { target: { value: "https://app.slack.com/client/T0LABENG/C1" } });
+      fireEvent.click(screen.getByRole("button", { name: "Use it" }));
+      expect(sent).toEqual([{ answer: "E0LAB" }, { answer: "manual" }, { answer: "https://app.slack.com/client/T0LABENG/C1" }]);
+    });
+  }
+});
+
 describe("Add a Tag", () => {
   it("adds to a workspace chosen on Home after asking only for the name, description and picture", async () => {
     const answers = setup(() => {}, "T0KLOVR1", "Klovr");
@@ -430,4 +467,33 @@ it("sends a Slack sign-in code once while Slack checks it", async () => {
   act(() => emit(login));
   fireEvent.click(screen.getByRole("button", { name: "Connect" }));
   expect(send).toHaveBeenCalledTimes(2);
+});
+
+it("gets a new Slack sign-in line and starts the steps over", async () => {
+  const api = demoBridge();
+  let emit!: (line: string) => void;
+  const send = vi.fn();
+  api.setup = async (_args, onLine) => { emit = onLine; return { send, stop: vi.fn() }; };
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+  const ask = (line: string) => JSON.stringify({ type: "question", id: "slack_login", kind: "slack_login", prompt: "Sign in to Slack",
+    sign_in_line: line, new_ticket: "new_ticket", can_go_back: false });
+  act(() => emit(ask("/slackauthticket OLD111")));
+  expect(screen.getByText(/Sign-in lines expire/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+  fireEvent.click(screen.getByRole("button", { name: "I clicked Confirm" }));
+  fireEvent.change(screen.getByLabelText("Code from Slack"), { target: { value: "OLDCODE1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Get a new sign-in line" }));
+  expect(send).toHaveBeenCalledWith({ answer: "new_ticket" });
+  // Only once while Slack makes the new line.
+  expect((screen.getByRole("button", { name: /Getting a new line/ }) as HTMLButtonElement).disabled).toBe(true);
+  act(() => emit(ask("/slackauthticket NEW222")));
+  expect(screen.getByText("/slackauthticket NEW222")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
+  expect(screen.queryByLabelText("Code from Slack")).toBeNull();
+  // The old code doesn't come back with the new line.
+  fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+  fireEvent.click(screen.getByRole("button", { name: "I clicked Confirm" }));
+  expect((screen.getByLabelText("Code from Slack") as HTMLInputElement).value).toBe("");
+  expect(send).toHaveBeenCalledTimes(1);
 });

@@ -10,22 +10,26 @@ Download Tag from the [Tag guide](https://www.hover.team/tag/) or from
 | Your computer | Download | Then |
 | --- | --- | --- |
 | Mac | `Tag-VERSION-macos.dmg` | Open it and drag Tag to **Applications**. |
+| Windows 10 or 11 | `Tag-VERSION-windows-setup.exe` | Open it and follow the installer. |
 | Linux (Ubuntu, Debian) | `Tag-VERSION-linux-amd64.deb` | Open it in your software installer, or run `sudo apt install ./Tag-VERSION-linux-amd64.deb`. |
 | Linux (other distributions) | `Tag-VERSION-linux-x86_64.AppImage` | Make it executable (`chmod +x`) and run it. |
 
-Each Linux download has a checksum in `DESKTOP-SHA256SUMS-linux` on the same
-release page. Check it with `sha256sum -c DESKTOP-SHA256SUMS-linux`.
+Each Windows and Linux download has a checksum in
+`DESKTOP-SHA256SUMS-windows` or `DESKTOP-SHA256SUMS-linux` on the same release
+page. On Linux, check it with `sha256sum -c DESKTOP-SHA256SUMS-linux`. On
+Windows, compare the file's line with the output of
+`Get-FileHash Tag-VERSION-windows-setup.exe` in PowerShell.
+
+The Windows installer isn't code-signed yet, so Windows may show **Windows
+protected your PC**. Check that you downloaded it from the release page, then
+click **More info** → **Run anyway**. It installs for your account only and
+doesn't need an administrator. The same installer works on Windows on ARM.
 
 The AppImage needs FUSE to open. If it fails with a FUSE or `fusermount`
 error, run it as `./Tag-VERSION-linux-x86_64.AppImage --appimage-extract-and-run`.
 
-Windows: coming soon. Until then, use the terminal installer. See
-[Install from a terminal](#install-from-a-terminal).
-
 The Linux app needs a desktop session. On a server without a display, use the
 terminal installer.
-
-During the 0.3 beta, downloads are prereleases.
 
 ## 2. Open it and click Install Tag
 
@@ -67,7 +71,7 @@ flowchart LR
 When you're done, the app opens on **Home**. Mention your Tag in Slack to try
 it. See [Your first task](getting-started/first-task.md).
 
-The app stays in the menu bar when you
+The app stays in the menu bar (on Windows, the notification area) when you
 close the window. To keep your Tags running after a restart, open
 **Settings** → **General** and turn on **Open Tag at login** and **Keep Tags
 running**.
@@ -75,8 +79,8 @@ running**.
 ## Before you begin
 
 - [ ] A computer that can stay awake and online while Tag answers: macOS 12 or
-  later or 64-bit Linux with a desktop for the desktop app. The terminal
-  installer also supports Windows 10 or 11 and Linux without a desktop.
+  later, Windows 10 or 11 (x64 or ARM), or 64-bit Linux with a desktop for the
+  desktop app. The terminal installer also supports Linux without a desktop.
 - [ ] About 1.8 GB of free disk space. A measured install used 1.8 GB: about
   1 GB for Tag's runtime and packages, and 560 MB for the local
   [memory model](reference/installation-details.md#memory-embedding-model).
@@ -209,7 +213,9 @@ To uninstall Tag completely:
 
 1. In the Tag app, click **Stop all** for each workspace. Then run
    `tag autostart off` and `tag memory stop` in a terminal.
-2. Quit the app and delete it. Drag it to the Trash.
+2. Quit the app and delete it. On a Mac, drag it to the Trash. On Windows,
+   remove **Tag** in **Settings** → **Apps** → **Installed apps**. Your Tags
+   stay.
 3. Remove the `tag` command from its folder.
 4. Back up anything you want to keep. Then delete Tag's files and each Tag's
    folder in `~/Tag`. See

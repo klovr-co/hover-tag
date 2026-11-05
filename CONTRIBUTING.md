@@ -101,7 +101,9 @@ queue the PR.
    Fix each CodeRabbit comment, or reply with why not, and resolve its thread;
    CodeRabbit approves once its threads are resolved. If it skipped the review
    for its rate limit, comment `@coderabbitai review`.
-2. Merges the base branch into the PR and waits for the checks again.
+2. If the base branch has moved, tests the PR merged with it and waits for the
+   checks again. A PR that already contains the latest base merges on its own
+   checks without rerunning CI.
 3. Squash-merges the PR, one PR at a time, so prerelease numbers follow merge
    order.
 

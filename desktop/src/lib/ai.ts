@@ -4,6 +4,7 @@
 // agents a Tag can use, its default model, and browser sign-in. Tag does the
 // checks and sign-ins; this file only reads what `tag … settings ai` prints.
 import { parseJSON } from "./protocol";
+import { machine } from "./machine";
 
 export const AI_CAPABILITY = "ai-connections";
 export const SHARED_AI_CAPABILITY = "shared-ai-connections";
@@ -247,12 +248,12 @@ export const isUrgent = (action: ConnectionAction | null) => action === "sign_in
 
 export const CODEX_METHODS = [
   { method: "chatgpt", title: () => "ChatGPT account for all Tags",
-    detail: "Shared by all Tags. Doesn't change Codex on this Mac." },
-  { method: "codex", title: () => "Codex sign-in on this Mac", detail: "Shared with Codex and your other Tags." },
+    detail: () => `Shared by all Tags. Doesn't change Codex on this ${machine()}.` },
+  { method: "codex", title: () => `Codex sign-in on this ${machine()}`, detail: () => "Shared with Codex and your other Tags." },
 ] as const;
 
-export const CLAUDE_SHARED_NOTE =
-  "Claude's sign-in is shared with Claude Code on this Mac. Signing in with another account changes it there too.";
+export const claudeSharedNote = () =>
+  `Claude's sign-in is shared with Claude Code on this ${machine()}. Signing in with another account changes it there too.`;
 
 
 

@@ -84,7 +84,9 @@ def stop_leftovers(directory: Path) -> None:
         print("Processes left running by Tag (stopped):\n" + result.stdout.strip())
 
 
-with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
+# A space and a non-ASCII letter, as in many real home folders, so path
+# quoting and encoding bugs fail here instead of on users' machines.
+with tempfile.TemporaryDirectory(prefix="Tag smoke é ") as temporary:
     directory = Path(temporary)
     env = dict(os.environ, TAG_HOME=str(directory / "home"))
     # Exercise the shipped payload, not a checkout that can mask omitted files.
@@ -97,8 +99,10 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
             if entry.external_attr >> 16 & 0o111:
                 (source / entry.filename).chmod(0o755)
     # The real bootstraps: neither needs a system Python.
+    # Tag.app starts install.ps1 from an extended-length \\?\C:\... resource
+    # path, so the smoke test does too.
     installer = (["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                  "-File", str(source / "install.ps1"), "-BinDir"]
+                  "-File", "\\\\?\\" + str(source / "install.ps1"), "-BinDir"]
                  if os.name == "nt" else ["sh", str(source / "install.sh"), "--bin-dir"])
     subprocess.run([*installer, str(directory / "bin")], env=env, check=True)
     command = directory / "bin" / ("tag.cmd" if os.name == "nt" else "tag")

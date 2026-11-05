@@ -14,8 +14,9 @@ try:
     import slack_identity
     import setup_ui as ui
     import tag_config as settings
+    import tag_dependencies
 except ImportError:
-    from scripts import slack_identity, setup_ui as ui, tag_config as settings
+    from scripts import slack_identity, setup_ui as ui, tag_config as settings, tag_dependencies
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -125,10 +126,10 @@ def prepare_project(project: Path, name: str, *, enterprise: bool = False, descr
 
 def is_installed(project: Path, team_id: str, app_id: str) -> bool:
     try:
-        result = subprocess.run(
+        result = tag_dependencies.run_slack(
             [shutil.which("slack") or "slack", "app", "list", "--team", team_id,
              "--app", app_id, "--skip-update", "--no-color"],
-            cwd=project, check=False, text=True, capture_output=True, timeout=30,
+            cwd=project, check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

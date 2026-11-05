@@ -71,7 +71,7 @@ Checking your inbox needs your email connected, for example
 
 ## Yours, not ours
 
-- **Runs on your Mac.** Tag uses your own AI account or API key. We don’t host
+- **Runs on your computer.** Tag uses your own AI account or API key. We don’t host
   your conversations or files.
 - **Only you can ask it.** Teammates see the replies and can join in. They don’t
   need to install anything. See [Your own Tag](concepts/access.md).
@@ -93,7 +93,7 @@ plan, or connect your own API key, and switch models whenever you want. See
 
 ### Where does my data go?
 
-Tag runs on your Mac. We don’t host your conversations or working files. Your AI
+Tag runs on your computer. We don’t host your conversations or working files. Your AI
 provider and any connected services process what each request needs, under their
 own policies. [Usage data](reference/telemetry.md) is anonymous, and you can
 turn it off.
@@ -105,7 +105,7 @@ workspace restricts apps, a Slack admin may need to approve Tag once.
 
 ### Is it Mac only?
 
-For now, yes. Windows and Linux are coming soon.
+No. Tag runs on macOS, Windows, and Linux.
 
 ### What does it cost?
 

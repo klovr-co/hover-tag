@@ -4,7 +4,7 @@
 // checks and signs in; these only draw what it reports.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  ACTION_LABEL, CLAUDE_SHARED_NOTE, CODEX_METHODS, isUrgent, primaryAction, statusLine,
+  ACTION_LABEL, claudeSharedNote, CODEX_METHODS, isUrgent, primaryAction, statusLine,
   findModel, type AIModels, type AIStatus, type Connection, type ModelEntry, type ModelGroup, type PermissionRule, type SignInState,
 } from "../lib/ai";
 import { useNight } from "../lib/appearance";
@@ -188,11 +188,11 @@ export function ChangeAccount({ connection, running, choose, cancel }: {
               <button key={option.method} className={method === option.method ? "opt sel" : "opt"} role="radio"
                 aria-checked={method === option.method} onClick={() => setMethod(option.method)}>
                 <span className={method === option.method ? "radio on" : "radio"} style={{ marginLeft: 0 }} />
-                <span className="txt"><span className="label">{option.title()}</span><span className="sub wrap">{option.detail}</span></span>
+                <span className="txt"><span className="label">{option.title()}</span><span className="sub wrap">{option.detail()}</span></span>
               </button>
             ))}
           </div>
-        ) : <p>{CLAUDE_SHARED_NOTE}</p>}
+        ) : <p>{claudeSharedNote()}</p>}
         {stops && <div className="dlg-note"><Icon name="restart" /><span>Running Tags pause while you sign in and start again afterwards.</span></div>}
         <div className="foot">
           <span className="spacer" />

@@ -34,6 +34,7 @@ try:
     import tag_credentials
     import tag_welcome
     import tag_mfs_runtime
+    from tag_process_identity import reported_by
     import tag_slack_backoff
     import tag_display as display
     import tag_autostart as autostart
@@ -54,14 +55,21 @@ except ImportError:
     from scripts import tag_credentials
     from scripts import tag_welcome
     from scripts import tag_mfs_runtime, tag_slack_backoff
+    from scripts.tag_process_identity import reported_by
     from scripts import tag_display as display
     from scripts import tag_autostart as autostart
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("cronsim", "mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
-# How long tag start waits for a setup, start or stop that holds the Tag's locks.
-START_LOCK_WAIT_SECONDS = 90
+# Seconds a new shared MFS may take to become healthy once its search model is present.
+MFS_STARTUP_SECONDS = 90
+# Seconds a new Slack bridge may take to reach Socket Mode. Its first start after
+# setup is the slowest, and an emulated runtime (Windows on Arm) took over 30.
+SLACK_STARTUP_SECONDS = 90
+# How long tag start waits for a setup, start or stop that holds the Tag's locks:
+# long enough for a start holding them to wait out memory and Slack, then finish.
+START_LOCK_WAIT_SECONDS = MFS_STARTUP_SECONDS + SLACK_STARTUP_SECONDS + 30
 APP_IDENTITY_WAIT_SECONDS = 10
 # Contract between this CLI and desktop apps; see docs/reference/app-protocol.md.
 # Bump only for incompatible changes; add a capability for anything new.
@@ -255,7 +263,9 @@ def start_process(
     record = state / f"{name}.json"
     if process_for(record):
         return False
-    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if os.name == "nt" else {"start_new_session": True}
+    # Its own console with no window, never no console at all: then every
+    # console program it starts (the venv's real Python, git, the agent CLIs) opens a window.
+    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
     with (state / f"{name}.log").open("ab") as log:
         process_cwd = cwd or Path((environment or os.environ).get("OPENTAG_WORKDIR", str(home / "workspace")))
         if cwd is None:
@@ -434,7 +444,7 @@ def slack_ready(home: Path, maximum_age: float = 5.0) -> bool:
         heartbeat = float(raw_heartbeat)
         return (
             instance_id == record["instance_id"]
-            and ready_pid == process.pid
+            and reported_by(process, ready_pid, "slack_socket_agent.py")
             and 0 <= time.time() - heartbeat <= maximum_age
         )
     except (OSError, ValueError, KeyError):
@@ -534,7 +544,7 @@ def start_development_slack(home: Path) -> None:
             environment=environment,
             metadata={"instance_id": instance_id},
         )
-    attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", "30"))
+    attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", str(SLACK_STARTUP_SECONDS)))
     for _ in range(attempts):
         if slack_ready(home):
             return
@@ -734,7 +744,7 @@ def startup_attempts(environment: dict[str, str], shared: Path) -> int:
     so a download still running (started by the installer) gets all the time it needs."""
     if "OPENTAG_MFS_STARTUP_ATTEMPTS" in environment:
         return int(environment["OPENTAG_MFS_STARTUP_ATTEMPTS"])
-    return 3600 if tag_model_download.active(shared) else 90
+    return 3600 if tag_model_download.active(shared) else MFS_STARTUP_SECONDS
 
 
 def _ensure_shared_memory_running(
@@ -3470,7 +3480,7 @@ def _run_cli() -> int:
                     metadata={"instance_id": instance_id},
                 ):
                     started.append("slack")
-            attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", "30"))
+            attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", str(SLACK_STARTUP_SECONDS)))
             for _ in range(attempts):
                 if slack_ready(home):
                     break

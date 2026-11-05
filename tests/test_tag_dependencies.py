@@ -98,18 +98,55 @@ class DependenciesTests(unittest.TestCase):
                     self.assertEqual(digest, checksum)
                     archive(path)
                 with patch.object(dependencies.sys, 'platform', platform), patch.object(dependencies.platform, 'machine', return_value=machine), patch.object(
-                        dependencies.shutil, 'which', return_value='/missing/slack'), patch.object(dependencies, 'slack_compatible', side_effect=compatible), patch.object(
+                        dependencies.shutil, 'which', return_value='/missing/slack'), patch.object(dependencies, 'slack_problem', side_effect=lambda c: None if compatible(c) else 'incompatible'), patch.object(
                         dependencies, 'download_verified', side_effect=OSError('interrupted')):
                     with self.assertRaises(OSError):
                         dependencies.ensure_slack(home)
                     self.assertFalse(destination.exists())
                 with patch.object(dependencies.sys, 'platform', platform), patch.object(dependencies.platform, 'machine', return_value=machine), patch.object(
-                        dependencies.shutil, 'which', return_value=None), patch.object(dependencies, 'slack_compatible', side_effect=compatible), patch.object(
+                        dependencies.shutil, 'which', return_value=None), patch.object(dependencies, 'slack_problem', side_effect=lambda c: None if compatible(c) else 'incompatible'), patch.object(
                         dependencies, 'download_verified', side_effect=fetch) as download:
                     self.assertEqual(dependencies.ensure_slack(home), destination)
                     self.assertEqual(dependencies.ensure_slack(home), destination)
                     download.assert_called_once()
                     self.assertEqual(auth.read_text(encoding="utf-8"), 'keep existing authorization')
+
+    def test_windows_on_arm_uses_the_emulated_x64_slack_cli(self):
+        # Slack ships no Windows ARM64 CLI; Windows 11 on ARM runs the x64 one.
+        self.assertEqual(dependencies.SLACK_ARTIFACTS[('win32', 'arm64')],
+                         dependencies.SLACK_ARTIFACTS[('win32', 'x86_64')])
+        with tempfile.TemporaryDirectory() as tmp, patch.object(dependencies.sys, 'platform', 'win32'), \
+                patch.object(dependencies.platform, 'machine', return_value='ARM64'), \
+                patch.object(dependencies.shutil, 'which', return_value=None), \
+                patch.object(dependencies, 'slack_problem', side_effect=lambda c: None if Path(c).is_file() else 'missing'), \
+                patch.object(dependencies, 'download_verified', side_effect=lambda u, p, d: archive(p)) as download:
+            destination = dependencies.ensure_slack(Path(tmp))
+        self.assertEqual(destination.name, 'slack.exe')
+        self.assertIn('windows_64-bit', download.call_args.args[0])
+
+    def test_publish_waits_for_windows_to_release_the_checked_cli(self):
+        # Windows briefly holds a just-run slack.exe open (WinError 32).
+        real_replace = os.replace
+        calls = []
+        def replace(source, target):
+            calls.append(source)
+            if len(calls) < 3:
+                raise PermissionError(32, 'The process cannot access the file')
+            real_replace(source, target)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(dependencies.os, 'replace', side_effect=replace), \
+                patch.object(dependencies.time, 'sleep') as sleep:
+            candidate, destination = Path(tmp) / 'candidate.exe', Path(tmp) / 'slack.exe'
+            candidate.write_bytes(b'cli')
+            dependencies.publish(candidate, destination)
+            self.assertEqual(destination.read_bytes(), b'cli')
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_publish_gives_up_when_the_cli_stays_locked(self):
+        with patch.object(dependencies.os, 'replace', side_effect=PermissionError(32, 'locked')), \
+                patch.object(dependencies.time, 'sleep'):
+            with self.assertRaises(PermissionError):
+                dependencies.publish(Path('candidate'), Path('destination'), attempts=3)
 
     def test_integrity_failure_and_https_redirect_rejected(self):
         for url, digest, succeeds in [('https://example.com/cli', hashlib.sha256(b'payload').hexdigest(), True),
@@ -124,12 +161,100 @@ class DependenciesTests(unittest.TestCase):
                         with self.assertRaises(RuntimeError):
                             dependencies.download_verified('https://example.com/cli', Path(tmp) / 'archive', digest)
 
-    def test_failed_version_validation_does_not_publish(self):
+    def test_failed_version_validation_does_not_publish_and_says_why(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(dependencies.sys, 'platform', 'darwin'), patch.object(dependencies.platform, 'machine', return_value='arm64'), patch.object(dependencies.shutil, 'which', return_value=None), patch.object(
-                dependencies, 'slack_compatible', return_value=False), patch.object(dependencies, 'download_verified', side_effect=lambda u, p, d: archive(p)):
-            with self.assertRaises(RuntimeError):
+                dependencies, 'slack_problem', return_value='it did not finish `slack version` within 20 seconds'), patch.object(dependencies, 'download_verified', side_effect=lambda u, p, d: archive(p)):
+            with self.assertRaisesRegex(RuntimeError, 'cannot run on this machine: it did not finish `slack version` within 20 seconds'):
                 dependencies.ensure_slack(Path(tmp))
             self.assertFalse((Path(tmp) / 'runtime/slack' / dependencies.SLACK_VERSION / 'slack').exists())
+
+    def test_version_check_names_why_the_cli_failed(self):
+        for outcome, reason in [
+                (subprocess.TimeoutExpired(['slack'], 20), 'did not finish `slack version` within 20 seconds'),
+                (FileNotFoundError(2, 'The system cannot find the file specified'), 'could not start (The system cannot find the file specified)'),
+                (subprocess.CompletedProcess([], 3221225477, '', ''), 'exited with code 3221225477'),
+                (subprocess.CompletedProcess([], 0, 'garbage', ''), "printed no version: 'garbage'"),
+                (subprocess.CompletedProcess([], 0, 'Using slack.exe v4.6.0', ''), 'version 4.6.0, not 4.7+'),
+                (subprocess.CompletedProcess([], 0, 'Using slack.exe v4.8.0\n', ''), None)]:
+            with self.subTest(reason=reason), patch.object(dependencies.subprocess, 'run', side_effect=[outcome]):
+                problem = dependencies.slack_problem('/slack')
+                if reason is None:
+                    self.assertIsNone(problem)
+                else:
+                    self.assertIn(reason, problem)
+
+    def test_slack_cli_runs_in_a_console_host_only_on_windows_on_arm(self):
+        # In a windowless console (as in Tag.app) the CLI waits forever for a terminal
+        # reply; with no console, each hook it runs opens a console window.
+        for platform, machine, expected in [('win32', 'ARM64', True), ('win32', 'AMD64', False),
+                                            ('linux', 'aarch64', False), ('darwin', 'arm64', False)]:
+            with self.subTest(platform=platform, machine=machine), patch.object(dependencies.sys, 'platform', platform),                     patch.object(dependencies.platform, 'machine', return_value=machine):
+                self.assertEqual(dependencies.slack_console_hosted(), expected)
+
+    def test_hosted_slack_cli_runs_windowless_through_the_base_interpreter(self):
+        done = subprocess.CompletedProcess([], 0, '', '')
+        with patch.object(dependencies, 'slack_console_hosted', return_value=True),                 patch.object(dependencies.subprocess, 'CREATE_NO_WINDOW', 0x08000000, create=True),                 patch.object(dependencies.sys, '_base_executable', '/base/python', create=True),                 patch.object(dependencies.subprocess, 'run', return_value=done) as run:
+            dependencies.run_slack([Path('/slack'), 'auth', 'list'], capture_output=True, timeout=30)
+        self.assertEqual(run.call_args.args[0],
+                         ['/base/python', '-I', str(ROOT / 'scripts/slack_console_host.py'), str(Path('/slack')), 'auth', 'list'])
+        self.assertEqual(run.call_args.kwargs, {'capture_output': True, 'timeout': 30, 'creationflags': 0x08000000})
+        with patch.object(dependencies, 'slack_console_hosted', return_value=False),                 patch.object(dependencies.subprocess, 'run', return_value=done) as run:
+            dependencies.run_slack(['/slack', 'version'], timeout=20)
+        self.assertEqual(run.call_args.args[0], ['/slack', 'version'])
+        self.assertEqual(run.call_args.kwargs, {'timeout': 20})
+
+    def test_version_check_runs_through_run_slack_with_no_stdin(self):
+        with patch.object(dependencies, 'run_slack', return_value=subprocess.CompletedProcess([], 0, 'v4.8.0', '')) as run:
+            self.assertTrue(dependencies.slack_compatible('/slack'))
+        self.assertEqual(run.call_args.args[0][1:], ['version', '--skip-update', '--no-color'])
+        self.assertEqual(run.call_args.kwargs['stdin'], subprocess.DEVNULL)
+
+    def test_every_captured_slack_cli_call_uses_run_slack(self):
+        # Otherwise setup in Tag.app, upgrades and reset hang at the next Slack CLI
+        # call on Windows on ARM, or the CLI's hooks open console windows.
+        from scripts import opentag_setup, slack_app_create, slack_credentials, slack_manifest_migrations, tag_reset
+        done = subprocess.CompletedProcess([], 0, 'Using slack.exe v4.8.0', '')
+        host = str(ROOT / 'scripts/slack_console_host.py')
+        hosted = (patch.object(dependencies, 'slack_console_hosted', return_value=True),
+                  patch.object(dependencies.subprocess, 'CREATE_NO_WINDOW', 0x08000000, create=True))
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / '.slack').mkdir()
+            (project / '.slack/apps.json').write_text('{}', encoding='utf-8')
+            calls = {
+                'auth list': lambda: opentag_setup.list_slack_sign_ins(),
+                'auth.test': lambda: opentag_setup.auth_test_member('T123'),
+                'version': lambda: opentag_setup.slack_cli_supports_icon_upload(),
+                'manifest info': lambda: opentag_setup.remote_app_settings(project, 'A123'),
+                'run_slack_cli': lambda: opentag_setup.run_slack_cli(['app', 'install']),
+                'app list': lambda: opentag_setup.slack_cli_apps(project, 'T123'),
+                'is_installed': lambda: slack_app_create.is_installed(project, 'T123', 'A123'),
+                'manifest sync': lambda: slack_manifest_migrations._run(['slack', 'manifest'], cwd=project),
+            }
+            for name, call in calls.items():
+                with self.subTest(call=name), hosted[0], hosted[1],                         patch.object(opentag_setup.ui, 'message'), patch('subprocess.run', return_value=done) as run:
+                    call()
+                    self.assertTrue(run.called)
+                    for invocation in run.call_args_list:
+                        self.assertEqual(invocation.args[0][2], host)
+                        self.assertEqual(invocation.kwargs.get('creationflags'), 0x08000000)
+            with hosted[0], hosted[1], patch.object(opentag_setup.ui, 'protocol_active', return_value=False),                     patch('subprocess.run', return_value=done) as run:
+                opentag_setup.run_slack_cli(['auth', 'login'], interactive=True)
+            # A terminal sign-in keeps the operator's console for Slack CLI prompts.
+            self.assertNotIn('creationflags', run.call_args.kwargs)
+            self.assertNotIn(host, run.call_args.args[0])
+        for module in (slack_credentials, tag_reset):
+            self.assertIn('tag_dependencies.run_slack(', Path(module.__file__).read_text(encoding='utf-8'))
+
+    def test_background_processes_get_a_windowless_console_not_none(self):
+        # A process with no console (DETACHED_PROCESS) gives every console program it
+        # starts a new, visible console window: the venv's real Python, git, the CLIs.
+        offenders = [path.name for path in sorted((ROOT / 'scripts').glob('*.py'))
+                     if 'DETACHED_PROCESS' in path.read_text(encoding='utf-8')]
+        self.assertEqual(offenders, [])
+        for name in ('tag_cli', 'tag_autostart', 'tag_telemetry', 'tag_model_download', 'tag_install', 'model_catalog'):
+            with self.subTest(module=name):
+                self.assertIn('CREATE_NO_WINDOW', (ROOT / f'scripts/{name}.py').read_text(encoding='utf-8'))
 
     @unittest.skipIf(os.name == "nt", "POSIX runtime migration")
     def test_migration_failure_has_no_checkpoint_and_preserves_active_record(self):
@@ -170,6 +295,24 @@ class DependenciesTests(unittest.TestCase):
             self.assertEqual(Path(runs[1][0]), Path('C:/Tag/python.exe'))
             self.assertEqual(rerun.call_args.args[0][0], 'managed')
             execv.assert_not_called()  # Windows execv would report success before the start finished
+
+    def test_runtime_info_paths_survive_a_non_ascii_tag_home(self):
+        # Windows PowerShell's console code page garbles non-ASCII paths, so
+        # install.ps1 writes UTF-8 bytes and prepare_python must decode UTF-8.
+        script = (ROOT / 'install.ps1').read_text(encoding='utf-8')
+        info = script[script.index('if ($RuntimeInfo) {'):script.index('if ($DependenciesOnly) {')]
+        self.assertIn('[Console]::OpenStandardOutput()', info)
+        self.assertNotIn('Write-Output', info)
+        home = Path('C:/Users/Zoë/AppData/Local/Tag')
+        def run(command, **options):
+            self.assertEqual(options.get('encoding'), 'utf-8')
+            self.assertNotIn('text', options)
+            return subprocess.CompletedProcess(command, 0, stdout=f'{home}/python.exe\n{home}/uv.exe\n')
+        with patch.object(dependencies.sys, 'platform', 'win32'), \
+                patch.object(dependencies.subprocess, 'run', side_effect=run):
+            python, uv = dependencies.prepare_python(ROOT, home)
+        self.assertEqual(python, home / 'python.exe')
+        self.assertEqual(uv, home / 'uv.exe')
 
     def test_migration_rechecks_slack_and_preserves_operator_environment(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'PATH': '/user/bin', 'SLACK_CONFIG_DIR': '/user/slack'}):

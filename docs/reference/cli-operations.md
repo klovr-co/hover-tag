@@ -392,9 +392,9 @@ because an existing app keeps its own name and picture.
 
 Next comes the AI, then the Slack workspace. Setup lists the Slack CLI's
 sign-ins on this computer and signs in only when there are none or you choose
-**Sign in to another workspace**. For an organization sign-in, enter the
-workspace's address or `T…` ID (from `app.slack.com/client/T…`); Tag can't list
-an organization's workspaces yet. The person signed in to Slack becomes the
+**Sign in to another workspace**. For an organization sign-in, setup lists its
+workspaces and picks the only one by itself. If yours isn't listed, enter the
+workspace's address or `T…` ID (from `app.slack.com/client/T…`). The person signed in to Slack becomes the
 Tag's owner: Tag reads it from the sign-in, or asks Slack, and stops with
 "Sign in to Slack again" rather than guess. Nothing in Slack changes before
 this step.
@@ -655,7 +655,10 @@ that are not JSON objects.
 
 `slack_login` (id `slack_login`) replaces the terminal's Slack CLI sign-in. Its `sign_in_line` is a
 one-time `/slackauthticket` command for the person to send in Slack; answer with
-the code Slack then shows. Setup never echoes the code. `tag add --json` never asks
+the code Slack then shows. Sign-in lines expire after a few minutes; answer `"new_ticket"` (the
+question's `new_ticket` value) to get a new one, and setup asks again with it. Setup never echoes the code.
+In a terminal, the Slack CLI's own sign-in runs instead, and if it doesn't finish, setup offers a new
+sign-in line (`slack_new_sign_in_line`) rather than stopping. `tag add --json` never asks
 for the Tag's ID; its result reports the ID once setup has named it.
 
 #### One question per command
