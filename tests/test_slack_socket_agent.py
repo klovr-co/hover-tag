@@ -7,6 +7,7 @@ from dataclasses import replace
 import os
 import signal
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -351,6 +352,34 @@ class WaitingRequestTests(unittest.TestCase):
         respond.assert_not_called()
         self.assertFalse(slack_socket_agent.QUEUED_REQUESTS[self.key][0].steered)
 
+    def test_every_early_steer_learns_the_request_cannot_stop(self) -> None:
+        first = self.mention_while_busy("1.5")
+        second = self.mention_while_busy("1.6")
+        responses = [self.steer(first), self.steer(second)]
+        slack_socket_agent.mark_thread_unstoppable(self.key)
+        for respond in responses:
+            self.assertEqual(slack_socket_agent.STEER_WAITS_MESSAGE, respond.call_args.kwargs["text"])
+
+    def test_a_correction_never_comes_before_the_reply_it_corrects(self) -> None:
+        button = self.mention_while_busy()
+        stop = slack_socket_agent.stop_holding_request
+        corrections: list[threading.Thread] = []
+
+        def stop_then_find_it_cannot_stop(*args: object) -> bool:
+            # The holding request finds it cannot stop before the button's own reply is sent.
+            stopping = stop(*args)
+            corrections.append(threading.Thread(target=slack_socket_agent.mark_thread_unstoppable, args=(self.key,)))
+            corrections[0].start()
+            corrections[0].join(0.2)
+            return stopping
+
+        with patch.object(slack_socket_agent, "stop_holding_request", side_effect=stop_then_find_it_cannot_stop):
+            respond = self.steer(button)
+        corrections[0].join(5)
+        texts = [call.kwargs["text"] for call in respond.call_args_list]
+        self.assertEqual(["Stopping the earlier request. I'll answer yours next.",
+                          slack_socket_agent.STEER_WAITS_MESSAGE], texts)
+
     def test_a_pending_steer_ends_with_the_request_it_was_for(self) -> None:
         button = self.mention_while_busy()
         self.steer(button)
@@ -612,9 +641,17 @@ class WaitingRequestTests(unittest.TestCase):
         self.assertEqual(behind.request_id, slack_socket_agent.THREAD_HANDOFFS[self.key])
 
     def test_a_request_whose_working_indicator_fails_passes_the_thread_on(self) -> None:
+        self.assert_failed_preparation_passes_the_thread_on(start_error=RuntimeError("Slack is down"))
+
+    def test_a_request_whose_temporary_directory_fails_passes_the_thread_on(self) -> None:
+        with patch.object(slack_socket_agent, "tag_temp_dir", side_effect=OSError("disk full")):
+            self.assert_failed_preparation_passes_the_thread_on(error=OSError)
+
+    def assert_failed_preparation_passes_the_thread_on(self, *, start_error: Exception | None = None,
+                                                       error: type[BaseException] = RuntimeError) -> None:
         behind = self.queued("1.6")
         indicator = MagicMock()
-        indicator.start.side_effect = RuntimeError("Slack is down")
+        indicator.start.side_effect = start_error
         threads: list[object] = []
 
         def make_thread(*args: object, **kwargs: object) -> MagicMock:
@@ -627,7 +664,7 @@ class WaitingRequestTests(unittest.TestCase):
 
         with patch.object(slack_socket_agent, "WorkingIndicator", side_effect=queue_behind), \
                 patch.object(slack_socket_agent.threading, "Thread", side_effect=make_thread), \
-                self.assertRaises(RuntimeError):
+                self.assertRaises(error):
             self.app.events["app_mention"](
                 {"channel": "C1", "ts": "1.5", "thread_ts": "1.0", "user": "U1", "text": "<@BOT> check A"},
                 {"team_id": "T1"}, self.client, MagicMock())

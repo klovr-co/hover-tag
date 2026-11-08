@@ -2288,6 +2288,8 @@ ACTIVE_RUNS_LOCK = threading.Lock()
 THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
 QUEUED_REQUEST_MESSAGE = "Queued. I'll answer this after my earlier request in this thread."
 QUEUED_REQUEST_FAILED_MESSAGE = "I couldn't start your queued message. Mention me again to send it."
+# How long a correction to a Steer now reply waits for that reply to be sent first.
+STEER_ANSWER_WAIT_SECONDS = 10.0
 STEER_WAITS_MESSAGE = "I'll answer yours as soon as the earlier request ends."
 STOPPING_REQUEST_MESSAGE = "I'm stopping an earlier request in this thread. I'll answer this right after."
 STOPPING_STATUS = "Stopping…"
@@ -2319,7 +2321,7 @@ THREAD_HANDOFFS: dict[RunKey, str] = {}
 THREAD_RESERVED_AT: dict[RunKey, float] = {}
 # Steer now clicks that came before the holding request's run registered, each with a
 # way to tell the requester if that request turns out to be one Steer now cannot stop.
-PENDING_STEERS: dict[RunKey, Callable[[], None]] = {}
+PENDING_STEERS: dict[RunKey, list[Callable[[], None]]] = {}
 # Threads whose holding request has no run Steer now could stop: a legacy transport
 # without streaming, or a run that already ended and is only delivering its reply.
 UNSTOPPABLE_THREADS: set[RunKey] = set()
@@ -2393,8 +2395,8 @@ def mark_thread_unstoppable(key: RunKey) -> None:
     """Note that the request holding the thread runs without a run Steer now could stop."""
     with ACTIVE_RUNS_LOCK:
         UNSTOPPABLE_THREADS.add(key)
-        tell_requester = PENDING_STEERS.pop(key, None)
-    if tell_requester is not None:
+        tell_requesters = PENDING_STEERS.pop(key, [])
+    for tell_requester in tell_requesters:
         tell_requester()
 
 
@@ -2471,7 +2473,7 @@ def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
     with ACTIVE_RUNS_LOCK:
         ACTIVE_RUNS[key] = run
         UNSTOPPABLE_THREADS.discard(key)
-        steered = PENDING_STEERS.pop(key, None) is not None
+        steered = bool(PENDING_STEERS.pop(key, None))
     if steered:
         run.cancel()
 
@@ -2489,7 +2491,7 @@ def stop_holding_request(key: RunKey, clicked_at: float,
             if (key not in BUSY_THREADS or key in UNSTOPPABLE_THREADS
                     or reserved_at is None or reserved_at > clicked_at):
                 return False
-            PENDING_STEERS[key] = tell_unstoppable
+            PENDING_STEERS.setdefault(key, []).append(tell_unstoppable)
             return True
     if reserved_at is None:
         return cancel_active_run(key, f"{clicked_at:.6f}")
@@ -4902,6 +4904,18 @@ def create_app(
                 client=client,
                 intent=SearchIntent("all"),
             )
+            session_workdir = str(default_workdir())
+            continued = thread_sessions.get(team, channel, thread_ts, request_backend,
+                                            workdir=session_workdir, requester=user_id)
+            output_manifest = (
+                default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
+            )
+            memory_receipts = tag_temp_dir() / f"memory-receipts-{uuid.uuid4().hex}.jsonl"
+            handoff_requests = (
+                tag_temp_dir() / f"handoff-request-{uuid.uuid4().hex}.jsonl"
+                if peer_ids and handoff_depth == 0 and not direct_message
+                else None
+            )
         except BaseException:
             # However preparation fails, the thread must pass to the next queued request.
             try:
@@ -4938,10 +4952,6 @@ def create_app(
                 except OSError:
                     logger.warning("Could not save the activity model")
 
-        session_workdir = str(default_workdir())
-
-        continued = thread_sessions.get(team, channel, thread_ts, request_backend,
-                                        workdir=session_workdir, requester=user_id)
         current_session: str | None = None
 
         def save_session(context_tokens: int | None = None) -> None:
@@ -4992,16 +5002,6 @@ def create_app(
                     activity_store.attach_error(activity_run_id, reference)
                 except OSError:
                     logger.warning("Could not link the error report to Tag activity")
-        output_manifest = (
-            default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
-        )
-        memory_receipts = tag_temp_dir() / f"memory-receipts-{uuid.uuid4().hex}.jsonl"
-        handoff_requests = (
-            tag_temp_dir() / f"handoff-request-{uuid.uuid4().hex}.jsonl"
-            if peer_ids and handoff_depth == 0 and not direct_message
-            else None
-        )
-
         try:
             with tempfile.TemporaryDirectory(
                 prefix="slack-invocation-",
@@ -5472,7 +5472,11 @@ def create_app(
                 respond(text=text, blocks=[{"type": "section", "text": {"type": "plain_text", "text": text}}],
                         response_type="ephemeral", replace_original=True)
 
+            answered = threading.Event()
+
             def tell_unstoppable() -> None:
+                # Correct the "Stopping" reply only after it is sent, so it can't overwrite the correction.
+                answered.wait(STEER_ANSWER_WAIT_SECONDS)
                 try:
                     reply(STEER_WAITS_MESSAGE)
                 except Exception:  # noqa: BLE001 - the earlier request must go on even if Slack is unreachable
@@ -5480,13 +5484,16 @@ def create_app(
 
             # A still-queued message waits on a request that began before this click; a later one is spared.
             clicked_at = time.time()
-            request = steer_queued_request(key, request_id)
-            if request is None:
-                reply("This message isn't waiting anymore.")
-            elif stop_holding_request(key, clicked_at, tell_unstoppable):
-                reply("Stopping the earlier request. I'll answer yours next.")
-            else:
-                reply(STEER_WAITS_MESSAGE)
+            try:
+                request = steer_queued_request(key, request_id)
+                if request is None:
+                    reply("This message isn't waiting anymore.")
+                elif stop_holding_request(key, clicked_at, tell_unstoppable):
+                    reply("Stopping the earlier request. I'll answer yours next.")
+                else:
+                    reply(STEER_WAITS_MESSAGE)
+            finally:
+                answered.set()
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Could not steer the Slack request: %s", exc)
 
