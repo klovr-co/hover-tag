@@ -53,6 +53,30 @@ class ProtocolTests(unittest.TestCase):
         documented = set(re.findall(r"^\| `([a-z0-9-]+)` \|", DOC.read_text(encoding="utf-8"), re.M))
         self.assertEqual(documented, set(tag_cli.CAPABILITIES))
 
+    def test_works_with_provides_what_apps_read(self) -> None:
+        for tag_id, user_id in (("t1-a1", "U0MAYA0TG"), ("t1-a2", "U0RESRCH1")):
+            home = tag_instances.create(self.root, tag_id).home
+            tag_config.save_config(home / "config/settings.json", {
+                "SLACK_TEAM_ID": "T1", "SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_BOT_NAME": tag_id})
+            (home / "state").mkdir(parents=True, exist_ok=True)
+            (home / "state/slack-avatar.json").write_text(json.dumps({"user_id": user_id}), encoding="utf-8")
+
+        def api(token, method, parameters):
+            return {"ok": True, "user_id": "U0MAYA0TG"} if method == "auth.test" else {
+                "ok": True, "members": [{"id": "U0HOVER01", "is_bot": True, "name": "Hover"}]}
+        promised = example("works-with.json")
+        with patch.dict(os.environ, {"PATH": "", "CLAUDE_CONFIG_DIR": str(self.root / "claude")}), \
+                patch("scripts.slack_channels.slack_api", api):
+            found = self.cli("t1-a1", "settings", "works-with", "candidates", "--json")
+            saved = self.cli("t1-a1", "settings", "works-with", "set", "U0RESRCH1", "U0HOVER01", "--json")
+        self.assertProvides(found, {k: v for k, v in promised.items() if k not in {"restart_required", "restarted"}},
+                            "tag NAME settings works-with candidates --json")
+        self.assertProvides(found["candidates"][0], promised["candidates"][0], "works-with candidates")
+        self.assertProvides(saved, {k: v for k, v in promised.items() if k not in {"candidates", "slack_error"}},
+                            "tag NAME settings works-with set --json")
+        self.assertEqual(saved["works_with"], [{"id": "U0RESRCH1", "name": "t1-a2", "kind": "tag"},
+                                               {"id": "U0HOVER01", "name": "Hover", "kind": "app"}])
+
     def test_routine_commands_provide_what_apps_read(self) -> None:
         home = tag_instances.create(self.root, "t1-a1").home
         tag_config.save_config(home / "config/settings.json", {

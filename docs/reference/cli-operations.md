@@ -42,6 +42,7 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Routines | The Tag → **Routines** | `tag NAME routine list\|show\|add\|edit\|pause\|resume\|remove\|run-now`; see [Routines](../concepts/routines.md) |
 | Permissions | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
 | Rules for one Tag | Details → **Permissions** → **Rules** | `tag NAME settings ai permissions allow\|block\|remove codex\|claude RULE`; `tag NAME settings ai permissions` lists them |
+| Works with (Tags and apps that can give a Tag tasks) | Details → **Works with** | `tag NAME settings works-with [candidates\|add ID [--as tag\|app]\|remove ID\|set ID ...]`; see [Sharing access](../concepts/sharing-access.md#choosing-who-your-tag-works-with) |
 | Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules [allow\|block\|remove codex\|claude RULE]` |
 | AI accounts | Settings → AI → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |

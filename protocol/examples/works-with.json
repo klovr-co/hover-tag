@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "tag": "t0klovr1-a0maya01",
+  "works_with": [
+    {"id": "U0RESRCH1", "name": "Research Tag", "kind": "tag"},
+    {"id": "U0HOVER01", "name": "Hover", "kind": "app"},
+    {"id": "B0123ABCD", "name": null, "kind": "app"}
+  ],
+  "error": null,
+  "candidates": [
+    {"id": "U0RESRCH1", "name": "Research Tag", "kind": "tag", "tag": "t0klovr1-a0resrch"},
+    {"id": "U0WRITER1", "name": "Writer Tag", "kind": "tag", "tag": "t0klovr1-a0writer"},
+    {"id": "U0GITHUB1", "name": "GitHub", "kind": "app"},
+    {"id": "U0HOVER01", "name": "Hover", "kind": "app"}
+  ],
+  "slack_error": null,
+  "restart_required": false,
+  "restarted": false
+}
