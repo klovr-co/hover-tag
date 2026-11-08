@@ -2,6 +2,24 @@
 
 All notable changes to Tag are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Choose who a Tag works with from a list instead of typing member IDs. In the
+  Tag's **Details**, **Works with** lists the Tags and apps that can give the
+  Tag tasks. **Add** opens a list with checkboxes: your other Tags in the same
+  Slack workspace, and the other apps' bots Slack lists there, such as Hover.
+  If someone isn't listed, paste their member ID. Your own Tags are added as
+  Tags, which can also be asked for help; anything else is added as an app,
+  whose bot may only ask the Tag to run a skill. Nothing is ticked for you,
+  and saving restarts a running Tag. In the terminal,
+  `tag NAME settings works-with [candidates|add ID|remove ID|set ID ...]` does
+  the same (`--as tag` adds someone else's Tag), and `tag NAME settings` has a
+  checklist. The list is still stored in `OPENTAG_PEER_TAGS` and
+  `SLACK_ALLOWED_BOT_IDS`, so existing values show up in it. It needs no new
+  Slack permission.
+
 ## [0.4.0] - 2026-11-03
 
 ### Added

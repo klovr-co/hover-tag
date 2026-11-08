@@ -42,6 +42,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
 | `telemetry-events` | `tag telemetry record EVENT FIELD=VALUE...`, `available` in `tag telemetry status\|on\|off --json`; see [Usage data](#usage-data) |
+| `works-with` | `tag NAME settings works-with [candidates\|add ID\|remove ID\|set [ID ...]] --json`: the Tags and apps that can give a Tag tasks; see [Works with](#works-with) |
 | `setup-v2` | Setup order Your Tag → AI → Workspace → Create → Channels; `profile`, `org_workspace`, `existing_app`, and `app_checks` questions; `recap`; creation `progress`; `ready` in the result |
 
 ## Tags
@@ -235,6 +236,28 @@ has `status` and, when it failed, `error`. See
 `protocol/examples/start-progress.jsonl`. Two different Tags can start at the
 same time; a second start of the same Tag waits up to 90 seconds for the first. Starting records that the Tag should keep running; stopping
 records that it should stay off (see [Keeping Tags running](cli-operations.md#keeping-tags-running)).
+
+### Works with
+
+The Tags and apps that can give a Tag tasks. A Tag on the list can also be
+asked for help (a handoff); an app's bot may only ask this Tag to run a skill.
+The list is stored in the same two settings as before, `OPENTAG_PEER_TAGS`
+(Tags) and `SLACK_ALLOWED_BOT_IDS` (apps), so `tag config set` still works and
+the bridge's checks don't change. It is empty by default; Tag never adds anyone
+by itself. See `protocol/examples/works-with.json`.
+
+| Command | Output |
+| --- | --- |
+| `tag NAME settings works-with --json` | `works_with`, the list, Tags first: `id` (a member ID, or a `B…` bot ID an owner saved), `name` (`null` for an app Tag hasn't seen in Slack yet), and `kind` (`tag` or `app`); and `error`, why a saved setting can't be read, or `null`. Reads only local files |
+| `tag NAME settings works-with candidates --json` | The same, plus `candidates`: the owner's other Tags in the same workspace on this computer (`kind` `tag`, with their Tag `tag` ID), then the other bots Slack's `users.list` returns (`kind` `app`), without Slackbot, deleted bots, or this Tag. `slack_error` says why Slack couldn't be read, or is `null`; the local Tags are still listed. Uses the `users:read` permission every Tag already has |
+| `tag NAME settings works-with add ID [--as tag\|app] [--name NAME] [--restart] --json` | The list, `restart_required`, and `restarted`. Without `--as`, the owner's own Tags are added as Tags and anything else as an app; use `--as tag` for someone else's Tag. `ID` is a member ID, or a bot ID for an app |
+| `tag NAME settings works-with remove ID [--restart] --json` | The same |
+| `tag NAME settings works-with set [ID ...] [--restart] --json` | The same; replaces the whole list (no IDs clears it). Saved entries keep their kind and name. Tag.app saves its picker this way |
+
+Changes apply when the Tag starts. A change to a running Tag returns
+`restart_required: true` unless `--restart` restarted it. When `error` is set,
+changes are refused until the setting is fixed or cleared with
+`tag config set`; Tag never rewrites a value it can't read.
 
 ## Setup
 

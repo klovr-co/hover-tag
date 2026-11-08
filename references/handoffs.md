@@ -9,7 +9,10 @@ different people on different machines, and people can follow the exchange.
 `OPENTAG_PEER_TAGS` lists peers as `Name=MEMBERID` pairs (each Tag's bot member
 ID). It controls both directions: the Tags this Tag may ask, and the bots whose
 requests and replies it accepts. Mentions from other bots are ignored. Empty
-disables handoffs; no migration is needed for existing installations.
+disables handoffs; no migration is needed for existing installations. Owners usually set it, together
+with `SLACK_ALLOWED_BOT_IDS`, through **Works with** in Tag.app or
+`tag NAME settings works-with` (`scripts/tag_works_with.py`), which offers
+their own Tags in the workspace and Slack's bots instead of raw member IDs.
 
 ## Flow
 
