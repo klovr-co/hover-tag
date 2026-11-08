@@ -99,8 +99,13 @@ queue the PR.
 1. Waits until every CI and clean-install check passes, CodeRabbit has
    approved, every review thread is resolved, and no review requests changes.
    Fix each CodeRabbit comment, or reply with why not, and resolve its thread;
-   CodeRabbit approves once its threads are resolved. If it skipped the review
-   for its rate limit, comment `@coderabbitai review`.
+   CodeRabbit approves once its threads are resolved. Findings it puts in the
+   review body instead of a thread, such as comments outside the diff, have no
+   thread to resolve and Mergify doesn't track them: fix each one, or explain
+   why not in a PR comment, before you queue. A new push dismisses earlier
+   approvals on `main` and `release/vX.Y.x`, so CodeRabbit must approve the
+   latest commit. If it skipped the review for its rate limit, comment
+   `@coderabbitai review`.
 2. If the base branch has moved, tests the PR merged with it and waits for the
    checks again. A PR that already contains the latest base merges on its own
    checks without rerunning CI.
