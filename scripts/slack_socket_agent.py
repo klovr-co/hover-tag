@@ -2318,6 +2318,17 @@ THREAD_HANDOFFS: dict[RunKey, str] = {}
 THREAD_RESERVED_AT: dict[RunKey, float] = {}
 # Steer now clicks that came before the holding request's run registered, by click time.
 PENDING_STEERS: dict[RunKey, float] = {}
+# Threads held by a request whose backend transport cannot be stopped.
+UNSTOPPABLE_THREADS: set[RunKey] = set()
+
+
+@dataclass(frozen=True)
+class ThreadClaim:
+    """The outcome of claiming a thread: claimed, or where the waiting request was queued instead."""
+
+    claimed: bool
+    place: int | None = None
+    stopping: bool = False
 
 
 def _thread_taken(key: RunKey, queued: WaitingRequest | None = None) -> bool:
@@ -2327,21 +2338,56 @@ def _thread_taken(key: RunKey, queued: WaitingRequest | None = None) -> bool:
         handoff is not None and (queued is None or queued.request_id != handoff))
 
 
-def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
-    """Claim a Slack thread for one request; False while an earlier request still runs.
+def _enqueue(key: RunKey, request: WaitingRequest, *, first: bool) -> int:
+    """Queue a request and return its place; the caller holds ACTIVE_RUNS_LOCK.
 
-    A queued request that loses the thread to a newer one goes back to the front
-    of the queue, so the request that holds the thread starts it next.
+    With ``first``, the request goes ahead of everything except requests someone steered.
+    """
+    queue = QUEUED_REQUESTS.setdefault(key, [])
+    if not first:
+        queue.append(request)
+        return len(queue) - 1
+    place = next((i for i, queued in enumerate(queue) if not queued.steered), len(queue))
+    queue.insert(place, request)
+    return place
+
+
+def _stopping(key: RunKey) -> bool:
+    """Whether the thread's run was asked to stop; the caller holds ACTIVE_RUNS_LOCK."""
+    run = ACTIVE_RUNS.get(key)
+    return run is not None and run.cancel_requested
+
+
+def claim_thread(key: RunKey, *, queued: WaitingRequest | None = None, waiting: WaitingRequest | None = None,
+                 stoppable: bool = True) -> ThreadClaim:
+    """Claim a Slack thread for one request, or queue ``waiting`` behind its holder in the same step.
+
+    Doing both under one lock keeps a newer message from taking a thread that
+    frees up between the two. A queued request that loses the thread goes back
+    to the front of the queue, so the request that holds the thread starts it
+    next. Once the holder is stopping, a waiting request goes ahead of everything
+    except steered requests.
     """
     with ACTIVE_RUNS_LOCK:
         if _thread_taken(key, queued):
             if queued is not None:
                 QUEUED_REQUESTS.setdefault(key, []).insert(0, queued)
-            return False
+                return ThreadClaim(False)
+            if waiting is None:
+                return ThreadClaim(False)
+            stopping = _stopping(key)
+            return ThreadClaim(False, _enqueue(key, waiting, first=stopping), stopping)
         THREAD_HANDOFFS.pop(key, None)
         BUSY_THREADS.add(key)
         THREAD_RESERVED_AT[key] = time.time()
-        return True
+        if not stoppable:
+            UNSTOPPABLE_THREADS.add(key)
+        return ThreadClaim(True)
+
+
+def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
+    """Claim a Slack thread for one request; False while an earlier request still runs."""
+    return claim_thread(key, queued=queued).claimed
 
 
 def _pop_queued_request(key: RunKey) -> WaitingRequest | None:
@@ -2369,6 +2415,7 @@ def release_thread(key: RunKey) -> WaitingRequest | None:
         BUSY_THREADS.discard(key)
         THREAD_RESERVED_AT.pop(key, None)
         PENDING_STEERS.pop(key, None)
+        UNSTOPPABLE_THREADS.discard(key)
         return _pop_queued_request(key)
 
 
@@ -2376,26 +2423,6 @@ def take_next_if_idle(key: RunKey) -> WaitingRequest | None:
     """The next queued request, unless a request holds the thread and will start it itself."""
     with ACTIVE_RUNS_LOCK:
         return None if _thread_taken(key) else _pop_queued_request(key)
-
-
-def queue_waiting_request(key: RunKey, request: WaitingRequest, *, first: bool = False) -> int | None:
-    """Queue a request behind the thread's current one and return its place; None when the thread is free.
-
-    A free thread is handed to the request at once, so a newer message cannot
-    claim it before the request starts. With ``first``, the request goes ahead
-    of everything except requests someone steered.
-    """
-    with ACTIVE_RUNS_LOCK:
-        if not _thread_taken(key):
-            THREAD_HANDOFFS[key] = request.request_id
-            return None
-        queue = QUEUED_REQUESTS.setdefault(key, [])
-        if not first:
-            queue.append(request)
-            return len(queue) - 1
-        place = next((i for i, queued in enumerate(queue) if not queued.steered), len(queue))
-        queue.insert(place, request)
-        return place
 
 
 def steer_queued_request(key: RunKey, request_id: str) -> WaitingRequest | None:
@@ -2440,7 +2467,8 @@ def stop_holding_request(key: RunKey, clicked_at: float) -> bool:
         run = ACTIVE_RUNS.get(key)
         if run is None:
             reserved_at = THREAD_RESERVED_AT.get(key)
-            if key not in BUSY_THREADS or reserved_at is None or reserved_at > clicked_at:
+            if (key not in BUSY_THREADS or key in UNSTOPPABLE_THREADS
+                    or reserved_at is None or reserved_at > clicked_at):
                 return False
             PENDING_STEERS[key] = clicked_at
             return True
@@ -2504,8 +2532,7 @@ def log_slack_delivery_lag(event: dict[str, Any], kind: str, now: float | None =
 def thread_stopping(key: RunKey) -> bool:
     """Return whether the thread's current run was asked to stop and has not exited yet."""
     with ACTIVE_RUNS_LOCK:
-        run = ACTIVE_RUNS.get(key)
-    return run is not None and run.cancel_requested
+        return _stopping(key)
 
 
 def pending_approval_prompt(key: RunKey, approval_id: str) -> dict[str, Any] | None:
@@ -4796,7 +4823,12 @@ def create_app(
         )
         if queued is not None:
             queued.settled = True
-        if not reserve_thread(thread_key, queued):
+        claim = claim_thread(
+            thread_key, queued=queued, waiting=None if queued is not None else waiting,
+            # Only the rich transports register a run that Steer now can stop.
+            stoppable=rich_events_selected(request_backend),
+        )
+        if not claim.claimed:
             # The status belongs to the run holding the thread, so leave it alone here.
             if queued is not None:
                 return  # Back at the front of the queue; the current request starts it next.
@@ -4808,12 +4840,7 @@ def create_app(
                 )
                 return
             # Once a stop is underway, steering means nothing; answer right after it.
-            stopping = thread_stopping(thread_key)
-            place = queue_waiting_request(thread_key, waiting, first=stopping)
-            if place is None:
-                start_waiting_request(waiting)
-                return
-            if stopping and place == 0:
+            if claim.stopping and claim.place == 0:
                 client.chat_postEphemeral(
                     channel=channel,
                     user=user_id,
@@ -5360,6 +5387,8 @@ def create_app(
                 following = take_next_if_idle(key)
                 if following is not None:
                     start_waiting_request(following)
+
+    app.tag_run_queued_request = run_queued_request
 
     def start_waiting_request(request: WaitingRequest) -> None:
         """Run a queued request in the background; if it cannot start, pass the thread to the next one."""
