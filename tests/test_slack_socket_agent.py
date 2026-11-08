@@ -401,9 +401,13 @@ class WaitingRequestTests(unittest.TestCase):
         self.assertEqual(slack_socket_agent.STEER_WAITS_MESSAGE, respond.call_args.kwargs["text"])
         self.assertTrue(respond.call_args.kwargs["replace_original"])
 
-    def run_with_transport(self, transport: str) -> bool:
-        """Run one request on a Claude transport with streaming off; whether it could be stopped."""
+    def run_with_transport(self, transport: str) -> tuple[bool, bool]:
+        """Run one request on a Claude transport with streaming off.
+
+        Return whether it could be stopped, and whether Steer now stopped a registered run.
+        """
         seen: list[bool] = []
+        steered: list[bool] = []
 
         def answer(*args: object, **kwargs: object) -> tuple[str, bool]:
             seen.append(self.key not in slack_socket_agent.UNSTOPPABLE_THREADS)
@@ -417,6 +421,7 @@ class WaitingRequestTests(unittest.TestCase):
                 button = self.mention_while_busy("1.6")
                 self.assertIn("Stopping", self.steer(button).call_args.kwargs["text"])
                 run.cancel.assert_called_once_with()
+                steered.append(True)
                 return answer()
             finally:
                 slack_socket_agent.unregister_active_run(self.key, run)
@@ -431,13 +436,13 @@ class WaitingRequestTests(unittest.TestCase):
                 {"channel": "C1", "ts": "1.5", "thread_ts": "1.0", "user": "U1", "text": "<@BOT> check A"},
                 {"team_id": "T1"}, self.client, MagicMock())
         (stoppable,) = seen
-        return stoppable
+        return stoppable, bool(steered)
 
     def test_a_request_on_a_transport_with_a_registered_run_can_be_steered(self) -> None:
-        self.assertTrue(self.run_with_transport("sdk"))
+        self.assertEqual((True, True), self.run_with_transport("sdk"))
 
     def test_a_legacy_request_without_streaming_cannot_be_steered(self) -> None:
-        self.assertFalse(self.run_with_transport("print"))
+        self.assertEqual((False, False), self.run_with_transport("print"))
 
     def test_steer_now_after_the_message_started_does_nothing(self) -> None:
         button = self.mention_while_busy()
