@@ -517,6 +517,33 @@ class WaitingRequestTests(unittest.TestCase):
         started.logger.warning.assert_not_called()
         self.assertIn("Too many files.", self.client.chat_postMessage.call_args.kwargs["text"])
 
+    def test_a_rejected_handoff_passes_the_thread_to_the_next_request(self) -> None:
+        _started, target = self.mention_as_thread_frees_up()
+        rejected, behind = self.queued("1.6"), self.queued("1.7")
+        self.assertTrue(slack_socket_agent.reserve_thread(self.key))
+        slack_socket_agent.QUEUED_REQUESTS[self.key] = [rejected, behind]
+        self.assertIs(rejected, slack_socket_agent.release_thread(self.key))
+        with patch.object(slack_socket_agent, "slack_conversation_allowed", return_value=False), \
+                patch.object(slack_socket_agent, "newly_invited_channel_allowed", return_value=False), \
+                patch.object(slack_socket_agent.threading, "Thread") as thread:
+            target(rejected)
+        self.assertIs(behind, thread.call_args.kwargs["args"][0])
+        self.assertEqual(behind.request_id, slack_socket_agent.THREAD_HANDOFFS[self.key])
+
+    def test_a_queued_retry_that_fails_links_its_report_to_the_first_failure(self) -> None:
+        _started, target = self.mention_as_thread_frees_up()
+        retry = slack_socket_agent.WaitingRequest(
+            {"channel": "C1", "ts": "1.6", "thread_ts": "1.0", "user": "U1", "text": "<@BOT> again"},
+            {"team_id": "T1"}, False, self.client, MagicMock(), prior_error_reference="ABC12345")
+        with patch.object(slack_socket_agent, "build_thread_text", return_value="thread"), \
+                patch.object(slack_socket_agent, "run_backend_events", return_value=("It broke.", False)), \
+                patch.object(slack_socket_agent, "make_error_report",
+                             wraps=slack_socket_agent.make_error_report) as report, \
+                patch.object(slack_socket_agent.threading, "Timer"), \
+                patch.object(slack_socket_agent.threading, "Thread"):
+            target(retry)
+        self.assertEqual("ABC12345", report.call_args.kwargs["related_reference"])
+
     def test_a_queued_request_from_a_channel_no_longer_allowed_is_dropped(self) -> None:
         started, target = self.mention_as_thread_frees_up()
         with patch.object(slack_socket_agent, "slack_conversation_allowed", return_value=False), \
