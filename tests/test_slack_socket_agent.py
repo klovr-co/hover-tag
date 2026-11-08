@@ -325,14 +325,50 @@ class WaitingRequestTests(unittest.TestCase):
         self.assertEqual(slack_socket_agent.ThreadClaim(True), slack_socket_agent.claim_thread(self.key, waiting=waiting))
         self.assertNotIn(self.key, slack_socket_agent.QUEUED_REQUESTS)
 
-    def test_steer_now_does_not_promise_to_stop_a_transport_that_cannot_stop(self) -> None:
-        self.assertTrue(slack_socket_agent.claim_thread(self.key, stoppable=False).claimed)
+    def test_steer_now_does_not_promise_to_stop_a_request_that_cannot_stop(self) -> None:
+        self.assertTrue(slack_socket_agent.reserve_thread(self.key))
+        slack_socket_agent.mark_thread_unstoppable(self.key)
         button = self.mention_while_busy()
+        notice = self.client.chat_postEphemeral.call_args.kwargs["blocks"][2]["elements"][0]["text"]
+        self.assertEqual("Steer now answers this one next, once the earlier request ends.", notice)
         respond = self.steer(button)
         self.assertIn("as soon as the earlier request ends", respond.call_args.kwargs["text"])
         self.assertEqual({}, slack_socket_agent.PENDING_STEERS)
         self.assertEqual("1.5", slack_socket_agent.release_thread(self.key).event["ts"])
         self.assertNotIn(self.key, slack_socket_agent.UNSTOPPABLE_THREADS)
+
+    def test_a_request_that_cannot_stop_drops_an_earlier_steer(self) -> None:
+        button = self.mention_while_busy()
+        self.steer(button)
+        self.assertIn(self.key, slack_socket_agent.PENDING_STEERS)
+        slack_socket_agent.mark_thread_unstoppable(self.key)
+        self.assertEqual({}, slack_socket_agent.PENDING_STEERS)
+
+    def run_with_transport(self, transport: str) -> bool:
+        """Run one request on a Claude transport with streaming off; whether it could be stopped."""
+        seen: list[bool] = []
+
+        def answer(*args: object, **kwargs: object) -> tuple[str, bool]:
+            seen.append(self.key not in slack_socket_agent.UNSTOPPABLE_THREADS)
+            return "done", True
+
+        with patch.dict(os.environ, {"OPENTAG_SLACK_STREAMING": "0", "OPENTAG_CLAUDE_TRANSPORT": transport}), \
+                patch.object(slack_socket_agent, "build_thread_text", return_value="thread"), \
+                patch.object(slack_socket_agent, "run_backend", side_effect=answer), \
+                patch.object(slack_socket_agent, "run_backend_events", side_effect=answer), \
+                patch.object(slack_socket_agent.threading, "Timer"), \
+                patch.object(slack_socket_agent.threading, "Thread"):
+            self.app.events["app_mention"](
+                {"channel": "C1", "ts": "1.5", "thread_ts": "1.0", "user": "U1", "text": "<@BOT> check A"},
+                {"team_id": "T1"}, self.client, MagicMock())
+        (stoppable,) = seen
+        return stoppable
+
+    def test_a_request_on_a_transport_with_a_registered_run_can_be_steered(self) -> None:
+        self.assertTrue(self.run_with_transport("sdk"))
+
+    def test_a_legacy_request_without_streaming_cannot_be_steered(self) -> None:
+        self.assertFalse(self.run_with_transport("print"))
 
     def test_steer_now_after_the_message_started_does_nothing(self) -> None:
         button = self.mention_while_busy()

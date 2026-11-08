@@ -40,7 +40,7 @@ unavailable behavior.
 | Use installed local tools and skills | Available | Each tool uses its own credentials and grants. |
 | Choose the model and thinking level | Implemented for both | Each Tag has one default model and thinking level, set in the Tag app → Details or `tag settings ai`. Per-user Slack overrides are retired. |
 | Stop an active task | Implemented with App Server or Agent SDK | Slack's native Stop button interrupts the active Codex turn or Claude session; the legacy exec and print transports remain rollback paths. |
-| Queue messages while Tag is busy | Implemented for both | A message to Tag while it is still working in the same thread waits its turn, and Tag tells only the sender it's queued. **Steer now** stops the current request and answers that message next. The legacy Codex exec and Claude print transports can't be stopped, so there **Steer now** only moves the message to the front. |
+| Queue messages while Tag is busy | Implemented for both | A message to Tag while it is still working in the same thread waits its turn, and Tag tells only the sender it's queued. **Steer now** stops the current request and answers that message next. On the legacy Codex exec and Claude print transports, a reply that isn't streamed can't be stopped. For that reply, the queued notice says so, and **Steer now** only moves the message to the front. |
 
 ## Context and memory
 

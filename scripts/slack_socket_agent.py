@@ -2318,7 +2318,7 @@ THREAD_HANDOFFS: dict[RunKey, str] = {}
 THREAD_RESERVED_AT: dict[RunKey, float] = {}
 # Steer now clicks that came before the holding request's run registered, by click time.
 PENDING_STEERS: dict[RunKey, float] = {}
-# Threads held by a request whose backend transport cannot be stopped.
+# Threads held by a request that runs without a registered run, so nothing can stop it.
 UNSTOPPABLE_THREADS: set[RunKey] = set()
 
 
@@ -2329,6 +2329,8 @@ class ThreadClaim:
     claimed: bool
     place: int | None = None
     stopping: bool = False
+    # Whether Steer now can stop the request holding the thread.
+    stoppable: bool = True
 
 
 def _thread_taken(key: RunKey, queued: WaitingRequest | None = None) -> bool:
@@ -2358,8 +2360,8 @@ def _stopping(key: RunKey) -> bool:
     return run is not None and run.cancel_requested
 
 
-def claim_thread(key: RunKey, *, queued: WaitingRequest | None = None, waiting: WaitingRequest | None = None,
-                 stoppable: bool = True) -> ThreadClaim:
+def claim_thread(key: RunKey, *, queued: WaitingRequest | None = None,
+                 waiting: WaitingRequest | None = None) -> ThreadClaim:
     """Claim a Slack thread for one request, or queue ``waiting`` behind its holder in the same step.
 
     Doing both under one lock keeps a newer message from taking a thread that
@@ -2376,13 +2378,19 @@ def claim_thread(key: RunKey, *, queued: WaitingRequest | None = None, waiting: 
             if waiting is None:
                 return ThreadClaim(False)
             stopping = _stopping(key)
-            return ThreadClaim(False, _enqueue(key, waiting, first=stopping), stopping)
+            return ThreadClaim(False, _enqueue(key, waiting, first=stopping), stopping,
+                               stoppable=key not in UNSTOPPABLE_THREADS)
         THREAD_HANDOFFS.pop(key, None)
         BUSY_THREADS.add(key)
         THREAD_RESERVED_AT[key] = time.time()
-        if not stoppable:
-            UNSTOPPABLE_THREADS.add(key)
         return ThreadClaim(True)
+
+
+def mark_thread_unstoppable(key: RunKey) -> None:
+    """Note that the request holding the thread runs without a run Steer now could stop."""
+    with ACTIVE_RUNS_LOCK:
+        UNSTOPPABLE_THREADS.add(key)
+        PENDING_STEERS.pop(key, None)
 
 
 def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
@@ -2438,7 +2446,7 @@ def steer_queued_request(key: RunKey, request_id: str) -> WaitingRequest | None:
 
 
 def queued_request_blocks(request_id: str, team: str, channel: str, thread_ts: str,
-                          user_id: str) -> list[dict[str, Any]]:
+                          user_id: str, *, stoppable: bool = True) -> list[dict[str, Any]]:
     """The private notice that a message is queued, with its Steer now button."""
     value = json.dumps({"request_id": request_id, "team": team, "channel": channel,
                         "thread_ts": thread_ts, "user": user_id}, separators=(",", ":"))
@@ -2449,7 +2457,8 @@ def queued_request_blocks(request_id: str, team: str, channel: str, thread_ts: s
              "text": {"type": "plain_text", "text": "Steer now"}, "value": value},
         ]},
         {"type": "context", "elements": [{"type": "plain_text", "text":
-            "Steer now stops the earlier request and answers this one next."}]},
+            "Steer now stops the earlier request and answers this one next." if stoppable
+            else "Steer now answers this one next, once the earlier request ends."}]},
     ]
 
 
@@ -4823,11 +4832,7 @@ def create_app(
         )
         if queued is not None:
             queued.settled = True
-        claim = claim_thread(
-            thread_key, queued=queued, waiting=None if queued is not None else waiting,
-            # Only the rich transports register a run that Steer now can stop.
-            stoppable=rich_events_selected(request_backend),
-        )
+        claim = claim_thread(thread_key, queued=queued, waiting=None if queued is not None else waiting)
         if not claim.claimed:
             # The status belongs to the run holding the thread, so leave it alone here.
             if queued is not None:
@@ -4853,7 +4858,8 @@ def create_app(
                 user=user_id,
                 thread_ts=thread_ts,
                 text=QUEUED_REQUEST_MESSAGE,
-                blocks=queued_request_blocks(waiting.request_id, team, channel, thread_ts, user_id),
+                blocks=queued_request_blocks(waiting.request_id, team, channel, thread_ts, user_id,
+                                             stoppable=claim.stoppable),
             )
             return
 
@@ -5010,6 +5016,9 @@ def create_app(
                     and peer_request is None
                 )
                 app_server_selected = rich_events_selected(request_backend)
+                if not (stream_available or app_server_selected):
+                    # The legacy transports without streaming register no run, so nothing can stop them.
+                    mark_thread_unstoppable(thread_key)
                 if app_server_selected:
                     try:
                         activity_run_id = activity_store.create(
