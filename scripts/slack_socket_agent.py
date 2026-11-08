@@ -2288,8 +2288,6 @@ ACTIVE_RUNS_LOCK = threading.Lock()
 THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
 QUEUED_REQUEST_MESSAGE = "Queued. I'll answer this after my earlier request in this thread."
 QUEUED_REQUEST_FAILED_MESSAGE = "I couldn't start your queued message. Mention me again to send it."
-# How long a correction to a Steer now reply waits for that reply to be sent first.
-STEER_ANSWER_WAIT_SECONDS = 10.0
 STEER_WAITS_MESSAGE = "I'll answer yours as soon as the earlier request ends."
 STOPPING_REQUEST_MESSAGE = "I'm stopping an earlier request in this thread. I'll answer this right after."
 STOPPING_STATUS = "Stopping…"
@@ -5472,15 +5470,23 @@ def create_app(
                 respond(text=text, blocks=[{"type": "section", "text": {"type": "plain_text", "text": text}}],
                         response_type="ephemeral", replace_original=True)
 
-            answered = threading.Event()
+            # The correction to a "Stopping" reply goes out after that reply, so the reply can't overwrite it.
+            # Whichever of the two finishes last sends it.
+            order = threading.Lock()
+            state = {"answered": False, "unstoppable": False}
 
-            def tell_unstoppable() -> None:
-                # Correct the "Stopping" reply only after it is sent, so it can't overwrite the correction.
-                answered.wait(STEER_ANSWER_WAIT_SECONDS)
+            def send_correction() -> None:
                 try:
                     reply(STEER_WAITS_MESSAGE)
                 except Exception:  # noqa: BLE001 - the earlier request must go on even if Slack is unreachable
                     logger.exception("Could not tell the requester the earlier request cannot stop")
+
+            def tell_unstoppable() -> None:
+                with order:
+                    state["unstoppable"] = True
+                    answered = state["answered"]
+                if answered:
+                    send_correction()
 
             # A still-queued message waits on a request that began before this click; a later one is spared.
             clicked_at = time.time()
@@ -5493,7 +5499,11 @@ def create_app(
                 else:
                     reply(STEER_WAITS_MESSAGE)
             finally:
-                answered.set()
+                with order:
+                    state["answered"] = True
+                    unstoppable = state["unstoppable"]
+                if unstoppable:
+                    send_correction()
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Could not steer the Slack request: %s", exc)
 

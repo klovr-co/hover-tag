@@ -380,6 +380,27 @@ class WaitingRequestTests(unittest.TestCase):
         self.assertEqual(["Stopping the earlier request. I'll answer yours next.",
                           slack_socket_agent.STEER_WAITS_MESSAGE], texts)
 
+    def test_a_slow_reply_still_comes_before_its_correction(self) -> None:
+        button = self.mention_while_busy()
+        texts: list[str] = []
+
+        def slow_reply(**kwargs: object) -> None:
+            if kwargs["text"].startswith("Stopping"):
+                # While the reply is still being sent, the holding request finds it cannot stop.
+                # Marking it must neither wait for the reply nor send the correction first.
+                marking = threading.Thread(target=slack_socket_agent.mark_thread_unstoppable, args=(self.key,))
+                marking.start()
+                marking.join(5)
+                self.assertFalse(marking.is_alive())
+            texts.append(str(kwargs["text"]))
+
+        self.app.actions[slack_socket_agent.STEER_NOW_ACTION_ID](
+            ack=MagicMock(), client=self.client, logger=MagicMock(), respond=MagicMock(side_effect=slow_reply),
+            body={"user": {"id": "U1"}, "channel": {"id": "C1"}, "team": {"id": "T1"},
+                  "actions": [{"action_id": slack_socket_agent.STEER_NOW_ACTION_ID, "value": button["value"]}]})
+        self.assertEqual(["Stopping the earlier request. I'll answer yours next.",
+                          slack_socket_agent.STEER_WAITS_MESSAGE], texts)
+
     def test_a_pending_steer_ends_with_the_request_it_was_for(self) -> None:
         button = self.mention_while_busy()
         self.steer(button)
