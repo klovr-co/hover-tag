@@ -2287,6 +2287,7 @@ ACTIVE_RUNS_LOCK = threading.Lock()
 
 THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
 QUEUED_REQUEST_MESSAGE = "Queued. I'll answer this after my earlier request in this thread."
+QUEUED_REQUEST_FAILED_MESSAGE = "I couldn't start your queued message. Mention me again to send it."
 STOPPING_REQUEST_MESSAGE = "I'm stopping an earlier request in this thread. I'll answer this right after."
 STOPPING_STATUS = "Stopping…"
 BUSY_THREADS: set[RunKey] = set()
@@ -2313,6 +2314,10 @@ class WaitingRequest:
 QUEUED_REQUESTS: dict[RunKey, list[WaitingRequest]] = {}
 # The queued request a thread was handed to, by request ID, until it claims the thread.
 THREAD_HANDOFFS: dict[RunKey, str] = {}
+# When the request holding each thread claimed it.
+THREAD_RESERVED_AT: dict[RunKey, float] = {}
+# Steer now clicks that came before the holding request's run registered, by click time.
+PENDING_STEERS: dict[RunKey, float] = {}
 
 
 def _thread_taken(key: RunKey, queued: WaitingRequest | None = None) -> bool:
@@ -2335,6 +2340,7 @@ def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
             return False
         THREAD_HANDOFFS.pop(key, None)
         BUSY_THREADS.add(key)
+        THREAD_RESERVED_AT[key] = time.time()
         return True
 
 
@@ -2361,6 +2367,8 @@ def release_thread(key: RunKey) -> WaitingRequest | None:
     """Free a Slack thread and return the queued request that should run next."""
     with ACTIVE_RUNS_LOCK:
         BUSY_THREADS.discard(key)
+        THREAD_RESERVED_AT.pop(key, None)
+        PENDING_STEERS.pop(key, None)
         return _pop_queued_request(key)
 
 
@@ -2373,10 +2381,13 @@ def take_next_if_idle(key: RunKey) -> WaitingRequest | None:
 def queue_waiting_request(key: RunKey, request: WaitingRequest, *, first: bool = False) -> int | None:
     """Queue a request behind the thread's current one and return its place; None when the thread is free.
 
-    With ``first``, the request goes ahead of everything except requests someone steered.
+    A free thread is handed to the request at once, so a newer message cannot
+    claim it before the request starts. With ``first``, the request goes ahead
+    of everything except requests someone steered.
     """
     with ACTIVE_RUNS_LOCK:
         if not _thread_taken(key):
+            THREAD_HANDOFFS[key] = request.request_id
             return None
         queue = QUEUED_REQUESTS.setdefault(key, [])
         if not first:
@@ -2418,6 +2429,22 @@ def queued_request_blocks(request_id: str, team: str, channel: str, thread_ts: s
 def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
     with ACTIVE_RUNS_LOCK:
         ACTIVE_RUNS[key] = run
+        steered = PENDING_STEERS.pop(key, None) is not None
+    if steered:
+        run.cancel()
+
+
+def stop_holding_request(key: RunKey, clicked_at: float) -> bool:
+    """Stop the request holding the thread if it began before the click, now or once its run starts."""
+    with ACTIVE_RUNS_LOCK:
+        run = ACTIVE_RUNS.get(key)
+        if run is None:
+            reserved_at = THREAD_RESERVED_AT.get(key)
+            if key not in BUSY_THREADS or reserved_at is None or reserved_at > clicked_at:
+                return False
+            PENDING_STEERS[key] = clicked_at
+            return True
+    return cancel_active_run(key, f"{clicked_at:.6f}")
 
 
 def unregister_active_run(key: RunKey, run: ActiveBackendRun) -> None:
@@ -5317,7 +5344,9 @@ def create_app(
                      request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
         try:
             # The channel may have been removed while the request waited.
-            if slack_conversation_allowed(request.event["channel"], direct_message=request.direct_message):
+            channel = request.event["channel"]
+            if slack_conversation_allowed(channel, direct_message=request.direct_message) or (
+                    not request.direct_message and newly_invited_channel_allowed(channel, request.client)):
                 handle_invocation(request.event, request.body, request.client, request.logger,
                                   direct_message=request.direct_message, queued=request,
                                   prior_error_reference=request.prior_error_reference)
@@ -5341,6 +5370,11 @@ def create_app(
             request.logger.exception("Could not start the queued Slack request")
             key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
                          request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
+            try:
+                request.client.chat_postEphemeral(channel=key.channel, user=request.event.get("user", ""),
+                                                  thread_ts=key.thread_ts, text=QUEUED_REQUEST_FAILED_MESSAGE)
+            except Exception:  # noqa: BLE001 - the queue must keep moving even if Slack is unreachable
+                request.logger.exception("Could not tell the requester their queued Slack request failed")
             drop_thread_handoff(key, request)
             if (following := take_next_if_idle(key)) is not None:
                 start_waiting_request(following)
@@ -5372,12 +5406,12 @@ def create_app(
             ):
                 return
             key = RunKey(team, channel, thread_ts)
-            # A still-queued message waits on a run that began before this click; a later run is spared.
-            clicked_at = f"{time.time():.6f}"
+            # A still-queued message waits on a request that began before this click; a later one is spared.
+            clicked_at = time.time()
             request = steer_queued_request(key, request_id)
             if request is None:
                 text = "This message isn't waiting anymore."
-            elif cancel_active_run(key, clicked_at):
+            elif stop_holding_request(key, clicked_at):
                 text = "Stopping the earlier request. I'll answer yours next."
             else:
                 text = "I'll answer yours as soon as the earlier request ends."
