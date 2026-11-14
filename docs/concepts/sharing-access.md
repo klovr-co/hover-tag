@@ -31,6 +31,36 @@ connected accounts available to Tag. If a teammate only needs to add context,
 review an answer, or take a task from the result, they can do that in the
 thread without being authorized to invoke Tag.
 
+## Choosing who your Tag works with
+
+Other Tags and apps can't give your Tag tasks until you choose them. In
+Tag.app, open the Tag, go to **Details**, and next to **Works with** click
+**Add** (or **Change**). Tick the Tags and apps it should work with, then
+click **Save and restart**. The list offers:
+
+- your other Tags in the same Slack workspace on this computer, and
+- the other apps' bots in the workspace, which Tag reads from Slack.
+
+If a Tag or app isn't listed, paste its member ID (or an app's bot ID). Nothing
+is ticked for you, and you can untick anyone later.
+
+Your own Tags are saved as Tags: they can ask your Tag for help, and your Tag
+can ask them (see below). Anything else is saved as an app: its bot may only
+ask your Tag to run a skill. In the terminal, the same list is:
+
+```bash
+tag NAME settings works-with              # who it works with
+tag NAME settings works-with candidates   # who you can add, with their IDs
+tag NAME settings works-with add U0123ABCD --restart
+tag NAME settings works-with remove U0123ABCD --restart
+```
+
+To add someone else's Tag as a Tag, use
+`tag NAME settings works-with add U0123ABCD --as tag --name "Sam's Tag"`.
+`tag NAME settings` also has a **Works with** checklist. The list is stored in
+`OPENTAG_PEER_TAGS` and `SLACK_ALLOWED_BOT_IDS`, described below, so values
+you set with `tag config set` show up in the list too.
+
 ## Letting other Tags ask your Tag
 
 Tags can ask each other for help in a channel they share. Your Tag accepts a
@@ -43,8 +73,9 @@ Your Tag then works for that person, with your Tag's environment and accounts,
 exactly as if they had asked it directly. Listing a peer also lets your Tag ask
 that Tag. Ask the other Tag's owner to list your Tag too.
 
-To find a Tag's bot member ID, open the Tag's profile in Slack, select **More**,
-and choose **Copy member ID**. Then run:
+Adding the Tag under **Works with** lists it for you. To do it by hand, find
+the Tag's bot member ID: open the Tag's profile in Slack, select **More**, and
+choose **Copy member ID**. Then run:
 
 ```bash
 tag config set OPENTAG_PEER_TAGS "Research Tag=U0123ABCD,Writer Tag=U0456EFGH"
@@ -56,7 +87,7 @@ tag restart
 Some apps ask Tag to run a skill by mentioning it in a thread. For example,
 Hover posts `@Tag /draft-reply` with the details after a person clicks a
 button. Your Tag accepts such a mention only from a bot that you listed in
-`SLACK_ALLOWED_BOT_IDS`, and only when the message is a request: it starts with
+`SLACK_ALLOWED_BOT_IDS` (an app under **Works with**), and only when the message is a request: it starts with
 the mention and a command, and its code block holds a Hover request ID
 (`"request_id": "hv-…"`). Other messages from that bot, such as a mirror of
 WhatsApp text that happens to mention Tag, are ignored. Mentions from other

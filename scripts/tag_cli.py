@@ -79,6 +79,7 @@ CAPABILITIES = (
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
     "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "permission-rules", "routines",
+    "works-with",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2385,6 +2386,57 @@ def _ai_target(context):
     )
 
 
+def _works_with_command(context, args) -> int:
+    """Show, list candidates for, or change who a Tag works with."""
+    try:
+        import tag_works_with
+        from tag_control import tag_command
+    except ImportError:
+        from scripts import tag_works_with
+        from scripts.tag_control import tag_command
+    action, ids = (args.arguments[1:2] or [""])[0], args.arguments[2:]
+    home = context.home
+    values = read_config(home / "config/settings.json") if (home / "config/settings.json").is_file() else {}
+    if action in {"", "candidates"}:
+        if ids or args.restart:
+            raise ValueError(" ".join(filter(None, ("works-with", action, "takes no IDs or --restart"))))
+        result = {"schema_version": 1, "tag": context.tag_id, **tag_works_with.current(home, values)}
+        if action == "candidates":
+            result.update(tag_works_with.candidates(context.installation_root, home, values))
+    else:
+        initialize_instance(home)
+        result = {"schema_version": 1, "tag": context.tag_id, **tag_works_with.edit(
+            context.installation_root, home, action, ids, kind=args.works_as, name=args.name)}
+        target = _ai_target(context)
+        running = target.running()
+        restarted = bool(args.restart and running and target.restart("restart") == 0)
+        result.update(restart_required=running and not restarted, restarted=restarted)
+    if args.json_output:
+        print(json.dumps(result, indent=2))
+        return 0
+    display.header("Works with", f"Tag '{context.tag_id}'")
+    if result.get("error"):
+        display.info_row("Problem", result["error"], good=False)
+    for entry in result["works_with"]:
+        display.info_row(entry["name"] or entry["id"], f"{'Tag' if entry['kind'] == 'tag' else 'App'} · {entry['id']}")
+    if not result["works_with"]:
+        print("  Nobody yet. Tags and apps can't give this Tag tasks until you add them.")
+    if action == "candidates":
+        listed = {entry["id"] for entry in result["works_with"]}
+        print("\n  You can add:")
+        for item in result["candidates"]:
+            if item["id"] not in listed:
+                print(f"  {item['id']}  {item['name']} ({'your Tag' if item['kind'] == 'tag' else 'app'})")
+        if result["slack_error"]:
+            print(f"  {result['slack_error']}")
+        display.next_action("Add one", tag_command(context.tag_id, "settings works-with add MEMBER_ID"))
+    elif result.get("restart_required"):
+        display.next_action("Apply the change", tag_command(context.tag_id, "restart"))
+    elif action in {"add", "remove", "set"} and not result.get("restarted"):
+        print("  Saved. It applies the next time this Tag starts.")
+    return 0
+
+
 def _global_ai_target(installation_root):
     """Connection changes restart exactly the Tags that were running beforehand."""
     try:
@@ -2555,7 +2607,8 @@ def _run_cli() -> int:
     parser.add_argument("--delete-app", action="store_true", help="remove: also permanently delete the Tag's Slack app")
     parser.add_argument("--confirm-app", help="remove --delete-app: the App ID to delete, typed to confirm")
     parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name); add: create the new Tag there without asking")
-    parser.add_argument("--name", help="add --workspace: the new Tag's name (default: the suggested one)")
+    parser.add_argument("--name", help="add --workspace: the new Tag's name (default: the suggested one); settings works-with add: the name to show")
+    parser.add_argument("--as", dest="works_as", choices=("tag", "app"), help="settings works-with add|set: a Tag (it can also be asked for help) or an app (it may only ask this Tag); default: your own Tags are Tags, anything else an app")
     raw_arguments = sys.argv[1:]
     explicit_tag = bool(
         raw_arguments
@@ -2585,10 +2638,15 @@ def _run_cli() -> int:
     if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "describe", "autostart", "chatgpt", "settings"}:
         parser.error("Only add, memory, config, telemetry, rename, describe, autostart, chatgpt, and settings accept additional positional arguments")
     settings_ai = args.command == "settings" and args.arguments[:1] == ["ai"]
-    if args.command == "settings" and args.arguments and not settings_ai:
-        parser.error("settings accepts only ai, for example tag settings ai --json")
-    if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
-        parser.error("--method, --account, --effort and --restart are only for tag settings ai")
+    works_with = args.command == "settings" and args.arguments[:1] == ["works-with"]
+    if args.command == "settings" and args.arguments and not (settings_ai or works_with):
+        parser.error("settings accepts ai or works-with, for example tag settings ai --json")
+    if (args.method or args.account or args.effort is not None) and not settings_ai:
+        parser.error("--method, --account and --effort are only for tag settings ai")
+    if args.restart and not (settings_ai or works_with):
+        parser.error("--restart is only for tag settings ai and tag settings works-with")
+    if args.works_as and not (works_with and args.arguments[1:2] in (["add"], ["set"])):
+        parser.error("--as is only for tag settings works-with add and set")
     if args.refresh and not (settings_ai and args.arguments[1:] == ["models"]):
         parser.error("--refresh is only for tag settings ai models")
     api_options = (args.api_backend, args.api_kind, args.base_url, args.api_models, args.api_version)
@@ -2600,8 +2658,8 @@ def _run_cli() -> int:
                 option is not None for option in (args.api_backend, args.api_kind, args.api_models, args.api_version))):
         parser.error("--backend, --kind, --base-url, --models and --api-version are only for tag settings ai api "
                      "(--base-url also works with tag memory embedding custom)")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not settings_ai:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, start, and stop/restart with --workspace")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not (settings_ai or works_with):
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, settings works-with, autostart, version, logs, setup, add, rename, describe, start, and stop/restart with --workspace")
     if args.json_output and args.follow:
         parser.error("--json cannot be combined with --follow")
     if args.json_output and args.command in {"stop", "restart"} and not args.workspace:
@@ -2612,8 +2670,8 @@ def _run_cli() -> int:
         parser.error("--nickname is only for rename")
     if args.workspace and args.command not in {"start", "stop", "restart", "add"}:
         parser.error("--workspace is only for start, stop, restart, and add")
-    if args.name and not (args.command == "add" and args.workspace):
-        parser.error("--name is only for add --workspace")
+    if args.name and not (args.command == "add" and args.workspace) and not (works_with and args.arguments[1:2] == ["add"]):
+        parser.error("--name is only for add --workspace and settings works-with add")
     if args.workspace and explicit_tag:
         parser.error("--workspace selects Tags itself; don't also name a Tag")
     if args.json_output and args.command in {"setup", "add"}:
@@ -2991,7 +3049,7 @@ def _run_cli() -> int:
         return int(args.command == "status" and report["state"] != "running")
     if args.command in {"setup", "settings", "reset"} and not display.stdin_is_terminal() and not (
         args.command == "setup" and os.getenv(SETUP_PROTOCOL_ENV) == "jsonl"
-    ) and not (settings_ai and (args.json_output or len(args.arguments) > 1)):
+    ) and not ((settings_ai or works_with) and (args.json_output or len(args.arguments) > 1)):
         print("Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
     if args.command == "reset":
@@ -3004,6 +3062,8 @@ def _run_cli() -> int:
         if args.arguments[1:2] not in ([], ["status"], ["models"]) and args.arguments[1:3] not in (["api"], ["api", "status"], ["api", "check"]):
             initialize_instance(home)  # Only changes need the private home; checks don't create one.
         return _settings_ai(context, args)
+    if works_with:
+        return _works_with_command(context, args)
     if args.command == "settings":
         initialize_instance(home)
         control.settings_menu(home, ai=_ai_target(context))

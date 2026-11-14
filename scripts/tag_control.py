@@ -380,9 +380,36 @@ def _choose_search_model() -> None:
     ui.message(report.get("note") or ("Memory restarted and is indexing your Slack channels again." if report.get("reindexing") else "Saved."))
 
 
+def _choose_works_with(home: Path) -> None:
+    """Tick the Tags and apps that can give this Tag tasks; nothing is ticked for you."""
+    try:
+        import tag_works_with
+    except ImportError:
+        from scripts import tag_works_with
+    values = settings.load_config(settings.config_path(home))
+    saved = tag_works_with.current(home, values)
+    if saved["error"]:
+        ui.message(f"{saved['error']}. Fix it with tag config set first.")
+        return
+    found = tag_works_with.candidates(tag_home(), home, values)
+    if found["slack_error"]:
+        ui.message(found["slack_error"])
+    saved = tag_works_with.current(home, values)  # Now with the names Slack just returned.
+    listed = {entry["id"]: entry for entry in saved["works_with"]}
+    options = list(saved["works_with"]) + [item for item in found["candidates"] if item["id"] not in listed]
+    if not options:
+        ui.message("No Tags or apps found. Add one by ID: " + tag_command(os.getenv("TAG_ID", "default"), "settings works-with add MEMBER_ID"))
+        return
+    labels = [f"{item['name'] or item['id']} ({'Tag' if item['kind'] == 'tag' else 'app'})" for item in options]
+    chosen = ui.checklist(labels, {index for index, item in enumerate(options) if item["id"] in listed},
+                          qid="works_with", prompt="Tags and apps that can give this Tag tasks", allow_empty=True)
+    tag_works_with.edit(tag_home(), home, "set", [options[index]["id"] for index in sorted(chosen)])
+    ui.message("Saved. Changes apply on next start; restart Tag if it is running.")
+
+
 def _settings_menu(home: Path, ai=None) -> None:
     groups = (
-        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "SLACK_CHANNEL_POLICY", "SLACK_ALLOWED_BOT_IDS", "change_app", "reconnect")),
+        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "SLACK_CHANNEL_POLICY", "works_with", "change_app", "reconnect")),
         ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN", "memory_model", "MFS_CHANNEL_SCOPES")),
         ("AI & models", ("OPENTAG_DEFAULT_MODEL",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
@@ -445,6 +472,7 @@ def _settings_menu(home: Path, ai=None) -> None:
                 ui.message("Saved. Restart Tag to apply the default model.")
             continue
         actions = {"change_app": "Change Slack app or workspace", "reconnect": "Reconnect credentials with Slack CLI",
+                   "works_with": "Works with: Tags and apps that can give this Tag tasks",
                    "memory_model": "Search model: " + _search_model_label()}
         labels = [actions.get(key, f"{settings.LABELS.get(key, key)}: {values.get(key, 'not set')}") for key in keys]
         if ui.keyboard_available():
@@ -460,6 +488,9 @@ def _settings_menu(home: Path, ai=None) -> None:
         try:
             if key == "memory_model":
                 _choose_search_model()
+                continue
+            if key == "works_with":
+                _choose_works_with(home)
                 continue
             if key in {"change_app", "reconnect", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_IDS", "MFS_SLACK_HISTORY_DAYS", "SLACK_CHANNEL_POLICY"}:
                 try:

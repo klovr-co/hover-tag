@@ -129,6 +129,7 @@
     "scripts/tag_telemetry_config.py",
     "scripts/tag_waterdrop.py",
     "scripts/tag_welcome.py",
+    "scripts/tag_works_with.py",
     "slack-app-manifest.yaml",
     "tag",
     "tag.cmd"

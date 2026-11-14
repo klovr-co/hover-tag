@@ -15,6 +15,7 @@ import aiModelsExample from "../../../protocol/examples/ai-models.json";
 import type { AIStatus, ApiConnection, Connection, PermissionRule } from "./ai";
 import type { RuleBackend } from "./permissions";
 import type { ActivityItem } from "./home";
+import type { WorksWithCandidate, WorksWithEntry } from "./worksWith";
 import { windowFitter } from "./fit";
 import { DEMO_ROUTINE_REFERENCE, demoRoutines } from "./routines";
 
@@ -247,6 +248,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let telemetry = new URLSearchParams(location.search).get("telemetry") === "ask" ? "not_set" : "on";
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
   const routines = demoRoutines();
+  // Who each Tag works with; empty until the owner adds someone.
+  const worksWith = new Map<string, WorksWithEntry[]>();
   // The sample routine's runs appear in its Tag's Activity, labelled with the routine.
   activity[rows[0].id].push(...routines.activity);
   return {
@@ -286,7 +289,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines", "works-with"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -418,6 +421,27 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           slack: ["Open Tag is live as @" + (row.slack_name ?? "Tag"),
             ...(row === rows[0] ? [`ERROR Routine r-3f9a1c2e7b failed [${DEMO_ROUTINE_REFERENCE}]: rate_limit: usage limit reached`] : [])],
           mfs: ["Memory server ready"] }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
+      }
+      if (row && second === "settings" && args[2] === "works-with") {
+        const memberId = (r: TagRow) => `U0${r.id.slice(-7).toUpperCase().replace(/[^A-Z0-9]/g, "")}`;
+        const candidates: WorksWithCandidate[] = [
+          ...rows.filter((r) => r !== row && r.slack_workspace === row.slack_workspace)
+            .map((r) => ({ id: memberId(r), name: r.slack_name ?? r.id, kind: "tag" as const, tag: r.id })),
+          { id: "U0GITHUB1", name: "GitHub", kind: "app" }, { id: "U0HOVER01", name: "Hover", kind: "app" }];
+        const list = worksWith.get(row.id) ?? [];
+        const [action, ...ids] = args.slice(3).filter((a) => !a.startsWith("--"));
+        if (action === "set") {
+          if (ids.some((id) => !/^[BUW][A-Z0-9]+$/.test(id))) return demoFail("Use Slack member IDs (U… or W…) or bot IDs (B…)");
+          const known = [...list, ...candidates];
+          worksWith.set(row.id, ids.map((id) => {
+            const found = known.find((c) => c.id === id);
+            return { id, name: found?.name ?? null, kind: found?.kind ?? "app" };
+          }).sort((a, b) => Number(a.kind === "app") - Number(b.kind === "app")));
+        }
+        const running = row.state === "running", restart = args.includes("--restart");
+        return json({ schema_version: 1, tag: row.id, works_with: worksWith.get(row.id) ?? [], error: null,
+          ...(action === "candidates" ? { candidates, slack_error: null } : {}),
+          ...(action === "set" ? { restart_required: running && !restart, restarted: running && restart } : {}) });
       }
       if (row && second === "routine") {
         const result = routines(row.id, row === rows[0], row.state === "running", args.slice(2));

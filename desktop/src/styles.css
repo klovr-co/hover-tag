@@ -831,6 +831,27 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .psel { height: 36px; font-size: 13.5px; font-weight: 600; padding: 0 8px; }
 .sl-kv dd.pdd .mcap, .sl-kv dd.pdd .mwarn { margin: 0; font-size: 13px; }
 .pdet.fresh { animation: rise2 .22s var(--ease); }
+/* Works with: who can give this Tag tasks, and the picker that changes it. */
+.ww-list, .ww-options { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ww-list { border: 1px solid var(--line); border-radius: 8px; }
+.ww-row, .ww-opt { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; font-size: 13px; }
+.ww-row + .ww-row { border-top: 1px solid var(--line); }
+.ww-name { font-weight: 600; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ww-row .meta, .ww-opt .meta { font-size: 12px; }
+.ww-av { flex: none; }
+.ww-acts { display: flex; align-items: center; gap: 10px; }
+.ww-pick { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px; animation: rise2 .22s var(--ease); }
+.ww-find { height: 32px; }
+.ww-options { max-height: 240px; overflow-y: auto; }
+.ww-opt { border-radius: 6px; cursor: pointer; padding: 0 6px; }
+.ww-opt:hover { background: var(--fill); }
+.ww-opt input { margin: 0; accent-color: var(--link); }
+.ww-loading { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12.5px; }
+.ww-note { margin: 0; font-size: 12.5px; }
+.ww-paste { display: flex; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+.ww-paste .field { flex: 1; min-width: 0; height: 30px; font-size: 12.5px; }
+.ww-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.ww-foot .meta { margin-right: auto; font-size: 12px; }
 .psaved { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; }
 .psaved li { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 6px 0 10px; font-size: 13px; transition: opacity .18s var(--ease); }
 .psaved li + li { border-top: 1px solid var(--line); }
