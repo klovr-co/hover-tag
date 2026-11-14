@@ -109,7 +109,7 @@ class ApprovedBotMentionTests(unittest.TestCase):
             channel="C1", thread_ts="1.0", text=slack_socket_agent.UNAUTHORIZED_USER_MESSAGE)
 
     def test_a_bot_request_in_a_busy_thread_is_told_so_in_the_thread(self) -> None:
-        # A bot cannot pick Queue or Steer, so it gets the thread-busy reply instead of a private offer.
+        # A bot cannot see a private queued notice, so it gets the thread-busy reply instead.
         key = slack_socket_agent.RunKey("T1", "C1", "1.0")
         self.assertTrue(slack_socket_agent.reserve_thread(key))
         self.addCleanup(slack_socket_agent.release_thread, key)

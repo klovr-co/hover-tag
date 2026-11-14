@@ -2,6 +2,17 @@
 
 All notable changes to Tag are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- When you message Tag while it is still working in the same thread, it now
+  queues your message without asking and tells only you that it's queued.
+  Press **Steer now** to stop the current request and answer your message
+  next, in the same conversation. Before, you had to choose **Queue** or
+  **Steer** first. Once your message has started, **Steer now** does nothing,
+  so you never get two answers.
+
 ## [0.4.0] - 2026-11-03
 
 ### Added

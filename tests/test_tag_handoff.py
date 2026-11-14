@@ -182,7 +182,7 @@ class ThreeTagTests(unittest.TestCase):
         backend.start()
         self.addCleanup(backend.stop)
         # Each Tag runs in its own process, so the busy-thread guard is not shared between them.
-        busy = patch.object(slack_socket_agent, "reserve_thread", return_value=True)
+        busy = patch.object(slack_socket_agent, "claim_thread", return_value=slack_socket_agent.ThreadClaim(True))
         busy.start()
         self.addCleanup(busy.stop)
         for tag in (TAG_A, TAG_B, TAG_C):

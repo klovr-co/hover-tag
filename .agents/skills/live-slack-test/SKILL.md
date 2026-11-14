@@ -64,7 +64,7 @@ One-time setup per sandbox, kept in `~/.config/tag-sandbox/` (never in the repo)
    Tag you mention needs the one-time setup in "Posting without a browser"
    below. Use the browser (`browser-use` skill, human account and Keychain
    password from the private file) only for what the API can't do: clicking
-   buttons such as Queue or Steer, and screenshots. If Slack asks for an emailed
+   buttons such as Steer now, and screenshots. If Slack asks for an emailed
    code, ask the user for it.
 4. **Watch the result.** Read the thread with
    `.agents/skills/live-slack-test/scripts/read_thread.sh <tag-id> <channel-id>`
