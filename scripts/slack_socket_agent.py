@@ -5394,6 +5394,14 @@ def create_app(
             if next_request is not None:
                 start_waiting_request(next_request)
 
+    def tell_queued_request_failed(request: WaitingRequest, key: RunKey) -> None:
+        """Tell only the requester that their queued message didn't get an answer."""
+        try:
+            request.client.chat_postEphemeral(channel=key.channel, user=request.event.get("user", ""),
+                                              thread_ts=key.thread_ts, text=QUEUED_REQUEST_FAILED_MESSAGE)
+        except Exception:  # noqa: BLE001 - the queue must keep moving even if Slack is unreachable
+            request.logger.exception("Could not tell the requester their queued Slack request failed")
+
     def run_queued_request(request: WaitingRequest) -> None:
         """Run a queued request; if it ends before taking the thread, keep the queue moving."""
         key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
@@ -5410,6 +5418,7 @@ def create_app(
                 request.logger.warning("Dropping a queued Slack request from a channel that is no longer allowed")
         except Exception:  # noqa: BLE001 - one failed request must not strand those queued behind it
             request.logger.exception("Could not run the queued Slack request")
+            tell_queued_request_failed(request, key)
         finally:
             if not request.settled:
                 drop_thread_handoff(key, request)
@@ -5428,11 +5437,7 @@ def create_app(
             request.logger.exception("Could not start the queued Slack request")
             key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
                          request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
-            try:
-                request.client.chat_postEphemeral(channel=key.channel, user=request.event.get("user", ""),
-                                                  thread_ts=key.thread_ts, text=QUEUED_REQUEST_FAILED_MESSAGE)
-            except Exception:  # noqa: BLE001 - the queue must keep moving even if Slack is unreachable
-                request.logger.exception("Could not tell the requester their queued Slack request failed")
+            tell_queued_request_failed(request, key)
             drop_thread_handoff(key, request)
             if (following := take_next_if_idle(key)) is not None:
                 start_waiting_request(following)

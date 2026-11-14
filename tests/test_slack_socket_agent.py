@@ -604,6 +604,14 @@ class WaitingRequestTests(unittest.TestCase):
                 target(started)
         return thread, started.logger
 
+    def test_a_queued_request_that_fails_tells_its_sender_and_starts_the_next(self) -> None:
+        thread, logger = self.run_queued(precheck=RuntimeError("disk full"))
+        logger.exception.assert_called_once()
+        kwargs = self.client.chat_postEphemeral.call_args.kwargs
+        self.assertEqual(("U1", "1.0", slack_socket_agent.QUEUED_REQUEST_FAILED_MESSAGE),
+                         (kwargs["user"], kwargs["thread_ts"], kwargs["text"]))
+        self.assertEqual("1.6", thread.call_args.kwargs["args"][0].event["ts"])
+
     def test_a_queued_request_stopped_by_a_precheck_still_starts_the_next(self) -> None:
         thread, _logger = self.run_queued(precheck=slack_socket_agent.AttachmentLimitError("Too many files."))
         self.assertEqual("1.6", thread.call_args.kwargs["args"][0].event["ts"])
