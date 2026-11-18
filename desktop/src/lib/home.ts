@@ -26,8 +26,8 @@ export interface ActivityItem {
   artifacts?: { name: string; kind: "file" | "image"; delivery: "uploaded" | "local" | "upload_failed";
     url?: string; local_path?: string }[];
   artifact_thread_url?: string;
-  /** Set when a routine started the run, rather than a person. */
-  trigger?: { type: "routine"; routine_id: string; name: string; trigger: string };
+  /** Set when a routine or `tag run` (an app or script) started the run, rather than a person in Slack. */
+  trigger?: { type: "routine"; routine_id: string; name: string; trigger: string } | { type: "run"; routine_id?: undefined; name?: undefined };
 
   at: string;
   kind: "replied" | "failed" | "stopped" | "working" | string;
@@ -98,7 +98,8 @@ export function whenText(at: Date, now: Date) {
   return at.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
-export const placeText = (item: ActivityItem) => item.dm ? "a direct message" : item.channel_name ? `#${item.channel_name}` : "a channel";
+export const placeText = (item: ActivityItem) => item.trigger?.type === "run" ? "an app or script"
+  : item.dm ? "a direct message" : item.channel_name ? `#${item.channel_name}` : "a channel";
 
 /** "Maya's Tag", "Maya's Tag and Research Tag", or "3 Tags". */
 export function whoText(names: string[]) {

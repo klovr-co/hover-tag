@@ -508,6 +508,7 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
     const preview = item.reply_summary?.trim() || item.reply_preview?.trim();
     const at = new Date(item.at);
     const key = activityKey({ tag, item });
+    const routine = item.trigger?.type === "routine" ? item.trigger : null;
     return (
       <div className={item.kind === "working" ? "sl-msg working" : "sl-msg"}>
         {/* Only the request still running moves; past messages keep a still picture. */}
@@ -517,9 +518,10 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
             {item.duration_seconds != null && Number.isFinite(item.duration_seconds) && item.duration_seconds > 0 && <span title="Generation time, including tool work">· {generationTime(item.duration_seconds)}</span>}
             {item.usage && <ActivityTokens usage={item.usage} />}
             <StepsToggle item={item} open={!!expanded[key]} controls={`${key}:work`} onToggle={() => setExpanded((all) => ({ ...all, [key]: !all[key] }))} />
-            {item.trigger && (openRoutine
-              ? <button className="activity-routine" title="Open this routine" onClick={() => openRoutine(item.trigger!.routine_id)}><Icon name="clock" size={11} />Routine: {item.trigger.name}</button>
-              : <span className="activity-routine"><Icon name="clock" size={11} />Routine: {item.trigger.name}</span>)}
+            {item.trigger?.type === "run" && <span className="activity-routine" title="Started by tag run, from an app or script"><Icon name="play" size={11} />Run</span>}
+            {routine && (openRoutine
+              ? <button className="activity-routine" title="Open this routine" onClick={() => openRoutine(routine.routine_id)}><Icon name="clock" size={11} />Routine: {routine.name}</button>
+              : <span className="activity-routine"><Icon name="clock" size={11} />Routine: {routine.name}</span>)}
           </div>
           {item.kind === "replied" ?
             preview && <p className="activity-reply-preview">{preview}</p>

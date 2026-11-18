@@ -26,7 +26,7 @@ RESERVED_NAMES = frozenset({
     "reset", "migrate", "upgrade", "rollback", "version", "paths",
     "doctor", "start", "stop", "restart", "status", "logs", "dev",
     "telemetry", "rename", "describe", "autostart", "chatgpt", "usage", "abandon", "remove",
-    "routine",
+    "routine", "run",
 })
 
 
@@ -80,7 +80,8 @@ def validate_name(name: str, *, allow_default: bool = True, existing: bool = Fal
         )
     if name == DEFAULT_TAG and not allow_default:
         raise ValueError("The alias 'default' is reserved for the built-in Tag")
-    if name in RESERVED_NAMES and not (existing and name == "usage"):
+    # A Tag created before its name became a command keeps working.
+    if name in RESERVED_NAMES and not (existing and name in {"usage", "run"}):
         raise ValueError(f"The alias '{name}' is reserved for a Tag command")
     return name
 

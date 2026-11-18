@@ -79,6 +79,7 @@ CAPABILITIES = (
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
     "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "permission-rules", "routines",
+    "run-jsonl",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2027,6 +2028,21 @@ def _routine_command(installation_root: Path, tag_id: str, arguments: list[str])
                                channels=_channels(values, context.home), tag_running=slack_ready)
 
 
+def _run_command(installation_root: Path, tag_id: str, arguments: list[str]) -> int:
+    """tag [TAG] run …: one prompt through the Tag's agent, streamed as JSON lines."""
+    try:
+        import tag_run_cli
+    except ImportError:
+        from scripts import tag_run_cli
+    tag_id = tag_instances.resolve_reference(installation_root, tag_id)
+    if tag_id == tag_instances.DEFAULT_TAG:
+        tag_id = tag_instances.select_unnamed(installation_root)
+    context = tag_instances.resolve(installation_root, tag_id)
+    path = context.home / "config/settings.json"
+    values = read_config(path) if path.is_file() else {}
+    return tag_run_cli.run(context.home, arguments, environment=instance_environment(context, values))
+
+
 def _abandon_command(context: tag_instances.InstanceContext, args) -> int:
     """Set aside a Tag whose setup never reached Slack. It is moved, never deleted."""
     import shutil
@@ -2573,6 +2589,8 @@ def _run_cli() -> int:
         if tag_id == tag_instances.DEFAULT_TAG:
             tag_id = tag_instances.select_unnamed(root)
         return _routine_command(root, tag_id, raw_arguments[1:])
+    if raw_arguments[:1] == ["run"]:
+        return _run_command(tag_home(), tag_id, raw_arguments[1:])
     args = parser.parse_args(raw_arguments)
     if args.activity and (args.command != "logs" or args.follow):
         parser.error("--activity requires logs and cannot be combined with --follow")

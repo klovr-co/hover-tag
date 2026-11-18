@@ -984,7 +984,10 @@ def main() -> int:
         choices=["claude", "codex"],
         default=os.getenv("OPENTAG_BACKEND"),
     )
-    parser.add_argument("--question", required=True)
+    question = parser.add_mutually_exclusive_group(required=True)
+    question.add_argument("--question")
+    # A file keeps a long prompt off the command line, which Windows limits to 32,767 characters.
+    question.add_argument("--question-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--channel-id", required=True)
     parser.add_argument("--thread-file", type=Path, required=True)
     parser.add_argument("--attachments-dir", type=Path)
@@ -1028,6 +1031,8 @@ def main() -> int:
     args = parser.parse_args()
     if not args.backend:
         parser.error("--backend or OPENTAG_BACKEND is required")
+    if args.question_file is not None:
+        args.question = read_text(args.question_file)
 
     disable_native_memory()
     workdir = args.workdir.resolve()
