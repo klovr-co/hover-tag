@@ -18,7 +18,7 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scripts import tag_activity, tag_cli, tag_config, tag_instances, tag_run_cli
 
@@ -55,8 +55,6 @@ FAKE_AGENT = textwrap.dedent('''
              details={"tool": "Read", "input": "notes.md"})
         emit("activity_complete", activity_id="tool-1", label="Reading files…", status="completed",
              details={"output": "3 lines"})
-        emit("message_start", phase="commentary")
-        emit("message_complete", "Checking.", phase="commentary")
         emit("message_start", phase="final_answer")
         emit("message_delta", "Three ", phase="final_answer")
         emit("message_delta", "lines.", phase="final_answer")
@@ -132,13 +130,13 @@ class RunCommandTests(unittest.TestCase):
         self.assertEqual({"type": "started", "session_id": "sess-1", "schema_version": 1}, lines[0])
         events = [line for line in lines if line["type"] == "event"]
         self.assertEqual(list(range(1, len(events) + 1)), [event["seq"] for event in events])
-        self.assertEqual(["status", "thinking", "thinking", "tool_use", "tool_result", "text", "text", "text"],
+        self.assertEqual(["status", "thinking", "thinking", "tool_use", "tool_result", "text", "text"],
                          [event["kind"] for event in events])
         self.assertEqual("Read the file first.", events[2]["text"])
         self.assertEqual({"tool": "Read", "input": "notes.md"}, events[3]["details"])
         self.assertEqual(("completed", {"output": "3 lines"}), (events[4]["status"], events[4]["details"]))
         self.assertEqual(events[3]["id"], events[4]["id"])
-        self.assertEqual([("commentary", "Checking."), ("final_answer", "Three "), ("final_answer", "lines.")],
+        self.assertEqual([("final_answer", "Three "), ("final_answer", "lines.")],
                          [(event["phase"], event["delta"]) for event in events[5:]])
         result = lines[-1]
         self.assertEqual(("result", "complete", "sess-1", "Three lines."),
@@ -216,11 +214,54 @@ class RunCommandTests(unittest.TestCase):
         self.assertEqual([], sorted(set(promised) - set(lines[-1])))
         self.assertEqual([], sorted(set(promised["error"]) - set(lines[-1]["error"])))
 
-    def test_an_unset_tag_or_bad_options_never_start_the_agent(self) -> None:
-        (self.home / "config/settings.json").unlink()
-        code, lines = self.run_tag("complete")
-        self.assertEqual((1, "failed"), (code, lines[-1]["status"]))
+    def test_an_unset_or_unreadable_tag_still_ends_with_the_result_line(self) -> None:
+        promised = set(json.loads(EXAMPLE.read_text(encoding="utf-8").splitlines()[-1])) | {"error"}
+        settings = self.home / "config/settings.json"
+        for problem in ("missing", "malformed"):
+            with self.subTest(problem=problem):
+                if problem == "missing":
+                    settings.unlink()
+                else:
+                    settings.write_text("{not json", encoding="utf-8")
+                code, lines = self.run_tag("complete")
+                self.assertEqual((1, ["result"], "failed"), (code, [line["type"] for line in lines], lines[0]["status"]))
+                self.assertEqual(set(), promised - set(lines[0]))
+                self.assertFalse(self.log.exists())
+
+    def test_model_discovery_also_sees_no_slack_credentials(self) -> None:
+        seen = []
+        with patch.object(tag_run_cli, "discover_tag_models", side_effect=lambda _backend: seen.append(dict(os.environ)) or []):
+            self.run_tag("complete")
+        self.assertEqual([], [name for name in seen[0] if name.startswith("SLACK_")])
+        self.assertEqual("claude", seen[0]["OPENTAG_BACKEND"])
+
+    def test_a_stop_before_the_agent_starts_ends_cancelled_without_starting_it(self) -> None:
+        def stopped_during_discovery(_backend):
+            os.kill(os.getpid(), signal.SIGINT)
+            return []
+
+        with patch.object(tag_run_cli, "discover_tag_models", side_effect=stopped_during_discovery):
+            code, lines = self.run_tag("complete")
+        self.assertEqual((1, ["result"], "cancelled"), (code, [line["type"] for line in lines], lines[0]["status"]))
         self.assertFalse(self.log.exists())
+        self.assertEqual(signal.default_int_handler, signal.getsignal(signal.SIGINT))
+
+    def test_a_forced_stop_ends_the_whole_process_tree(self) -> None:
+        process = MagicMock()
+        process.pid, process.poll.return_value = 4242, None
+        with patch.object(tag_run_cli.os, "name", "nt"), patch.object(tag_run_cli.subprocess, "run") as run:
+            tag_run_cli.kill_tree(process)
+        self.assertEqual(["taskkill", "/T", "/F", "/PID", "4242"], run.call_args.args[0])
+
+    def test_a_tag_created_with_the_name_run_stays_reachable(self) -> None:
+        with patch.object(tag_instances, "RESERVED_NAMES", tag_instances.RESERVED_NAMES - {"run"}):
+            tag_instances.create(self.root, "run")  # made before run was a command
+        with patch.object(sys, "argv", ["tag", "run", "status", "--json"]), \
+                patch.object(tag_cli, "_run_command") as run_command, redirect_stdout(io.StringIO()):
+            tag_cli.main()
+        run_command.assert_not_called()
+
+    def test_bad_options_never_start_the_agent(self) -> None:
         with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()):
             tag_run_cli.parse(["--prompt-file", str(self.prompt), "--json", "--max-turns", "0"])
         with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()):

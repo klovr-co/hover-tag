@@ -23,19 +23,19 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     from .agent_activity import THINKING_LABEL, token_usage
     from .agent_models import default_agent_settings, discover_tag_models, rich_events_selected
-    from .opentag_process_env import backend_environment
+    from .opentag_process_env import backend_environment, isolated_environment
     from .tag_activity import ITEM_STATUSES, ActivityStore, activity_step
     from .tag_error_reporting import redact_sensitive_text
     from .tag_paths import tag_temp_dir
 except ImportError:  # Direct script execution does not create a package context.
     from agent_activity import THINKING_LABEL, token_usage
     from agent_models import default_agent_settings, discover_tag_models, rich_events_selected
-    from opentag_process_env import backend_environment
+    from opentag_process_env import backend_environment, isolated_environment
     from tag_activity import ITEM_STATUSES, ActivityStore, activity_step
     from tag_error_reporting import redact_sensitive_text
     from tag_paths import tag_temp_dir
@@ -121,16 +121,12 @@ def observe(run: Run, event: dict[str, Any], *, deny_approval) -> None:
         run.start(session_id)
     elif kind == "message_start":
         run.streamed = False
-    elif kind == "message_delta" and isinstance(text, str) and text:
-        run.streamed = True
-        run.event("text", phase=event.get("phase") or "final_answer", delta=text)
-        if event.get("phase", "final_answer") == "final_answer":
-            run.answer.append(text)
-    elif kind == "message_complete" and isinstance(text, str) and text and not run.streamed:
-        # A message that arrived whole, without deltas.
-        run.event("text", phase=event.get("phase") or "final_answer", delta=text)
-        if event.get("phase", "final_answer") == "final_answer":
-            run.answer.append(text)
+    elif kind in {"message_delta", "message_complete"} and event.get("phase", "final_answer") == "final_answer" \
+            and isinstance(text, str) and text and not (kind == "message_complete" and run.streamed):
+        # Deltas stream the answer; a message that arrived whole, without deltas, is sent at once.
+        run.streamed = kind == "message_delta"
+        run.event("text", phase="final_answer", delta=text)
+        run.answer.append(text)
     elif kind in {"activity_start", "activity_complete"} and (step := activity_step(event)) is not None:
         step_id, label, details = step
         status = "running" if kind == "activity_start" else (
@@ -173,60 +169,133 @@ def error_message(run: Run, status: str) -> str:
     return redact_sensitive_text(detail, limit=1000) or f"The agent stopped with status {status}."
 
 
-def fail(message: str) -> int:
-    print(json.dumps({"schema_version": SCHEMA_VERSION, "type": "result", "status": "failed", "session_id": None,
-                      "usage": None, "error": {"code": None, "message": message}}), flush=True)
-    return 1
+def kill_tree(process: subprocess.Popen[str]) -> None:
+    """Stop the agent and everything it started, such as a tool that ignored the interruption."""
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, check=False)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            return
+        except OSError:
+            pass
+    if process.poll() is None:
+        process.kill()
 
 
-def run(home: Path, arguments: list[str], *, environment: dict[str, str]) -> int:
-    """Run the prompt with the Tag's own environment and print the protocol lines."""
+def run(arguments: list[str], *, load: Callable[[], tuple[Path, dict[str, str] | None]]) -> int:
+    """Print the protocol lines for one run; ``load`` finds the Tag and its environment (None: not set up).
+
+    The stop signals are handled for the whole call, so a stop at any point still ends with the result line.
+    """
     args = parse(arguments)
-    if not (home / "config/settings.json").is_file():
-        return fail("This Tag isn't set up yet. Run tag setup first.")
+    state = Run(resume=args.resume)
+    agent: dict[str, Any] = {}
+
+    def stop(*_: Any) -> None:
+        process = agent.get("process")
+        if process is not None and process.poll() is not None:
+            return
+        if state.cancel_requested:
+            if process is not None:
+                kill_tree(process)  # A second stop request doesn't wait for the agent.
+            return
+        state.cancel_requested = True
+        if process is not None:
+            signal_agent(process, agent)
+
+    previous = {name: signal.signal(getattr(signal, name), stop) for name in STOP_SIGNALS if hasattr(signal, name)}
+    try:
+        try:
+            status = launch(args, state, agent, load)
+        except Exception as error:  # noqa: BLE001 - whatever happens, the last line is the result
+            state.error_text = state.error_text or f"Tag couldn't finish the run: {error}"
+            status = "cancelled" if state.cancel_requested else "failed"
+        if agent.get("activity") is not None:
+            agent["record"]("finish", OUTCOMES[status])
+            if status == "complete" and state.answer:
+                agent["record"]("save_reply", "".join(state.answer))
+        if "process" in agent:
+            state.start(state.session_id or state.resume)
+        result: dict[str, Any] = {
+            "type": "result", "status": status, "session_id": state.session_id or state.resume,
+            "usage": state.usage, "model": state.model, "run_id": agent.get("activity"), "text": "".join(state.answer)}
+        if status != "complete":
+            result["error"] = {"code": state.error_code, "message": error_message(state, status)}
+        state.line(result)
+        return 0 if status == "complete" else 1
+    finally:
+        for name, handler in previous.items():
+            signal.signal(getattr(signal, name), handler)
+
+
+def signal_agent(process: subprocess.Popen[str], agent: dict[str, Any]) -> None:
+    """Ask the agent to stop as Slack's Stop does, and kill it if it hasn't within the grace period."""
+    try:
+        agent["control_file"].write_text(agent["run_id"], encoding="utf-8")
+    except OSError:
+        kill_tree(process)
+        return
+    grace = threading.Timer(CANCEL_GRACE_SECONDS, kill_tree, args=(process,))
+    grace.daemon = True
+    grace.start()
+
+
+def launch(args: argparse.Namespace, state: Run, agent: dict[str, Any],
+           load: Callable[[], tuple[Path, dict[str, str] | None]]) -> str:
+    """Start the Tag's agent, stream its events, and return the result status."""
+    home, environment = load()
+    if environment is None:
+        state.error_text = "This Tag isn't set up yet. Run tag setup first."
+        return "failed"
     # Model discovery and every helper below read the Tag's settings from the environment.
+    # Without Slack's: discovery starts the backends too, and a run has no Slack access.
     os.environ.clear()
-    os.environ.update(environment)
+    os.environ.update(isolated_environment(environment, transport="local"))
     default_backend = os.getenv("OPENTAG_BACKEND") or "codex"
     settings = default_agent_settings(discover_tag_models(default_backend))
     backend = settings.backend or default_backend
     if not rich_events_selected(backend):
-        return fail(f"tag run needs the {backend} event transport "
-                    f"({'app-server' if backend == 'codex' else 'sdk'}); this Tag uses an older one.")
+        state.error_text = (f"tag run needs the {backend} event transport "
+                            f"({'app-server' if backend == 'codex' else 'sdk'}); this Tag uses an older one.")
+        return "failed"
+    if state.cancel_requested:
+        return "cancelled"
     default_limit = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     max_timeout = args.timeout_minutes * 60 if args.timeout_minutes else default_limit
     timeout = min(int(os.getenv("OPENTAG_TIMEOUT_SECONDS", "420")), max_timeout)
 
     activity = ActivityStore(home / "state/activity", publish_live=False)
-    try:
-        activity_id: str | None = activity.create(team="", channel="", thread_ts="", request_ts="", requester="",
-                                                  reasoning_effort=settings.reasoning_effort, trigger={"type": "run"})
-    except OSError:
-        activity_id = None
 
     def record(method: str, *values: Any, **options: Any) -> None:
-        if activity_id is not None:
-            try:
-                getattr(activity, method)(activity_id, *values, **options)
-            except OSError:
-                pass
+        try:
+            getattr(activity, method)(agent["activity"], *values, **options)
+        except OSError:
+            pass
 
-    state = Run(resume=args.resume)
-    status = "failed"
+    try:
+        agent["activity"] = activity.create(team="", channel="", thread_ts="", request_ts="", requester="",
+                                            reasoning_effort=settings.reasoning_effort, trigger={"type": "run"})
+        agent["record"] = record
+    except OSError:
+        pass
+
     with tempfile.TemporaryDirectory(prefix="tag-run-", dir=tag_temp_dir()) as raw:
         work = Path(raw)
         (work / "question.txt").write_text(args.prompt, encoding="utf-8")
         (work / "thread.txt").write_text("", encoding="utf-8")
         (work / "approvals").mkdir()
-        control_file, agent_run_id = work / "control", uuid.uuid4().hex
-        control_file.write_text("", encoding="utf-8")
+        agent.update(control_file=work / "control", run_id=uuid.uuid4().hex)
+        agent["control_file"].write_text("", encoding="utf-8")
         command = [
             sys.executable, str(AGENT), "--backend", backend, "--channel-id", "",
             "--question-file", str(work / "question.txt"), "--thread-file", str(work / "thread.txt"),
             "--skill-dir", str(ROOT), "--workdir", os.getenv("OPENTAG_WORKDIR", str(Path.cwd())),
             "--timeout", str(timeout), "--max-timeout", str(max_timeout), "--event-stream",
             "--fast-mode", "on" if settings.fast_mode else "off",
-            "--control-file", str(control_file), "--run-id", agent_run_id,
+            "--control-file", str(agent["control_file"]), "--run-id", agent["run_id"],
             "--approval-dir", str(work / "approvals"),
         ]
         if settings.model:
@@ -247,48 +316,26 @@ def run(home: Path, arguments: list[str], *, environment: dict[str, str]) -> int
                 start_new_session=os.name != "nt",
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
         except OSError as error:
-            record("finish", "failed")
-            return fail(f"Could not start the agent: {error}")
-
-        def force_stop() -> None:
-            if process.poll() is None:
-                if os.name != "nt":
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                        return
-                    except OSError:
-                        pass
-                process.kill()
-
-        def stop(*_: Any) -> None:
-            if process.poll() is not None:
-                return
-            if state.cancel_requested:
-                force_stop()  # A second stop request doesn't wait for the agent.
-                return
-            state.cancel_requested = True
-            try:
-                control_file.write_text(agent_run_id, encoding="utf-8")
-            except OSError:
-                force_stop()
-                return
-            grace = threading.Timer(CANCEL_GRACE_SECONDS, force_stop)
-            grace.daemon = True
-            grace.start()
+            state.error_text = f"Could not start the agent: {error}"
+            return "failed"
+        agent["process"] = process
+        if state.cancel_requested:
+            signal_agent(process, agent)  # Stopped while it was starting.
 
         def time_out() -> None:
             state.timed_out = True
-            force_stop()
+            kill_tree(process)
 
         def deny_approval(approval_id: str) -> None:
             if len(approval_id) == 32 and all(c in "0123456789abcdef" for c in approval_id):
                 target = work / "approvals" / f"{approval_id}.json"
                 temporary = target.with_name(f".{approval_id}.tmp")
-                temporary.write_text(json.dumps({"decision": "deny"}), encoding="utf-8")
-                os.replace(temporary, target)
+                try:
+                    temporary.write_text(json.dumps({"decision": "deny"}), encoding="utf-8")
+                    os.replace(temporary, target)
+                except OSError:
+                    kill_tree(process)  # An approval it can't refuse must not wait for an answer.
 
-        previous = {name: signal.signal(getattr(signal, name), stop)
-                    for name in STOP_SIGNALS if hasattr(signal, name)}
         timer = threading.Timer(max_timeout + 10, time_out)
         timer.daemon = True
         timer.start()
@@ -305,6 +352,8 @@ def run(home: Path, arguments: list[str], *, environment: dict[str, str]) -> int
                         state.diagnostics = [*state.diagnostics[-50:], line]
                     continue
                 observe(state, event, deny_approval=deny_approval)
+                if "record" not in agent:
+                    continue
                 if event.get("type") in {"usage", "activity_start", "activity_complete"}:
                     record("observe", event)
                 elif event.get("type") == "session" and state.session_id:
@@ -313,22 +362,9 @@ def run(home: Path, arguments: list[str], *, environment: dict[str, str]) -> int
                     effort = event.get("reasoning_effort")
                     record("save_model", backend, state.model,
                            reasoning_effort=effort if isinstance(effort, str) else None)
-            status = result_status(state, process.wait())
+            return result_status(state, process.wait())
         finally:
             timer.cancel()
-            for name, handler in previous.items():
-                signal.signal(getattr(signal, name), handler)
-            force_stop()
+            kill_tree(process)
             if process.stdout is not None:
                 process.stdout.close()
-            record("finish", OUTCOMES[status])
-    answer = "".join(state.answer)
-    if status == "complete" and answer:
-        record("save_reply", answer)
-    state.start(state.session_id or state.resume)
-    result: dict[str, Any] = {"type": "result", "status": status, "session_id": state.session_id or state.resume,
-                              "usage": state.usage, "model": state.model, "run_id": activity_id, "text": answer}
-    if status != "complete":
-        result["error"] = {"code": state.error_code, "message": error_message(state, status)}
-    state.line(result)
-    return 0 if status == "complete" else 1

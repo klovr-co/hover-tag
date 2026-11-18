@@ -685,9 +685,9 @@ The output is one JSON object per line, each with `schema_version: 1`:
 - `{"type": "event", "seq", "kind", …}` lines follow as the agent works. `seq`
   counts from 1. Each `kind` reuses what Activity records for a step (see
   `tag NAME logs --activity RUN --json`):
-  - `text`: `phase` (`final_answer`, or `commentary` for text the agent
-    writes between tool calls) and `delta`, the next part of that text.
-    Joining the `final_answer` deltas gives the answer.
+  - `text`: `phase` and `delta`, the next part of the answer. `phase` is
+    `final_answer`; both agents keep the notes they write between tool calls
+    private, as in Slack. Joining the deltas gives the answer.
   - `thinking`: `id`, `status`, and `text`, the provider's thinking summary,
     once the step completes and when the Tag shares thinking
     (`OPENTAG_SHOW_THINKING`).
@@ -697,11 +697,13 @@ The output is one JSON object per line, each with `schema_version: 1`:
     `details` (`output`). Details are redacted and shortened as in Activity.
   - `status`: `text`, a short notice such as a retry.
 - `{"type": "result", "status", "session_id", "usage", "model", "run_id",
-  "text", "error"?}` comes last, always, also when the run fails to start.
+  "text", "error"?}` comes last, always: also when the Tag can't be found or
+  read, or the run is stopped before the agent starts. Then it is the only line.
   `status` is `complete`, `failed`, `cancelled`, or `timeout`. `usage` has the
   cumulative `input_tokens`, `output_tokens` and `total_tokens` (input
   includes cached input), or is `null` when the provider reported none.
-  `text` is the final answer. `run_id` names the run's Activity record.
+  `text` is the final answer. `run_id` names the run's Activity record, or is
+  `null` when the run never started.
   `error` has `code` (such as `error_max_turns`, or `null`) and `message`
   when `status` isn't `complete`.
 
@@ -712,7 +714,8 @@ printed.
 To stop a run, send it SIGTERM or SIGINT. On Windows, press Ctrl+C in its
 console, or start it with `CREATE_NEW_PROCESS_GROUP` and send
 `CTRL_BREAK_EVENT` to that group. The agent stops cleanly, and the last line is still the `result`,
-with `status: "cancelled"`. A second signal stops it at once. Nothing the
+with `status: "cancelled"`. A second signal stops it at once, with every
+process it started. Nothing the
 agent finished before the stop is rolled back.
 
 Nobody can approve an action during a run, so Tag denies each approval

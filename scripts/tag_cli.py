@@ -2034,13 +2034,18 @@ def _run_command(installation_root: Path, tag_id: str, arguments: list[str]) -> 
         import tag_run_cli
     except ImportError:
         from scripts import tag_run_cli
-    tag_id = tag_instances.resolve_reference(installation_root, tag_id)
-    if tag_id == tag_instances.DEFAULT_TAG:
-        tag_id = tag_instances.select_unnamed(installation_root)
-    context = tag_instances.resolve(installation_root, tag_id)
-    path = context.home / "config/settings.json"
-    values = read_config(path) if path.is_file() else {}
-    return tag_run_cli.run(context.home, arguments, environment=instance_environment(context, values))
+
+    def load() -> tuple[Path, dict[str, str] | None]:
+        selected = tag_instances.resolve_reference(installation_root, tag_id)
+        if selected == tag_instances.DEFAULT_TAG:
+            selected = tag_instances.select_unnamed(installation_root)
+        context = tag_instances.resolve(installation_root, selected)
+        path = context.home / "config/settings.json"
+        if not path.is_file():
+            return context.home, None
+        return context.home, instance_environment(context, read_config(path))
+
+    return tag_run_cli.run(arguments, load=load)
 
 
 def _abandon_command(context: tag_instances.InstanceContext, args) -> int:
@@ -2577,7 +2582,8 @@ def _run_cli() -> int:
         raw_arguments
         and not raw_arguments[0].startswith("-")
         and (raw_arguments[0] not in COMMANDS or (
-            raw_arguments[0] == "usage" and len(raw_arguments) > 1 and raw_arguments[1] in COMMANDS
+            # A Tag created before its name became a command: tag usage status, tag run run.
+            raw_arguments[0] in {"usage", "run"} and len(raw_arguments) > 1 and raw_arguments[1] in COMMANDS
         ))
     )
     tag_id = raw_arguments.pop(0) if explicit_tag else "default"
