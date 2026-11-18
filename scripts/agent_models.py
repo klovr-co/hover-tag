@@ -433,6 +433,90 @@ def apply_tag_effort(models: list[ModelOption], effort: str | None) -> list[Mode
     ]
 
 
+@dataclass(frozen=True)
+class AgentSettings:
+    model: str | None = None
+    reasoning_effort: str | None = None
+    fast_mode: bool | None = None
+    backend: str | None = None
+
+
+def configured_reasoning_efforts() -> tuple[str, ...]:
+    configured = tuple(
+        value.strip().lower()
+        for value in os.getenv("OPENTAG_CODEX_REASONING_EFFORTS", "").split(",")
+        if value.strip().lower() in SUPPORTED_REASONING_EFFORTS
+    )
+    return configured or DEFAULT_REASONING_EFFORTS
+
+
+def find_model(
+    model: str | None,
+    models: list[ModelOption],
+    backend: str | None = None,
+) -> ModelOption | None:
+    if model is None:
+        return None
+    return next(
+        (item for item in models if item.model_id == model and backend in {None, item.backend}),
+        None,
+    )
+
+
+def efforts_for_model(
+    model: str | None,
+    models: list[ModelOption],
+    backend: str | None = None,
+) -> tuple[str, ...]:
+    available = configured_reasoning_efforts() if backend in {None, "codex"} else SUPPORTED_REASONING_EFFORTS
+    allowed = set(available)
+    if model:
+        selected = find_model(model, models, backend)
+        if selected:
+            return tuple(effort for effort in selected.reasoning_efforts if effort in allowed)
+    scoped = [item for item in models if backend in {None, item.backend}]
+    discovered = {effort for item in scoped for effort in item.reasoning_efforts}
+    return tuple(effort for effort in available if not discovered or effort in discovered)
+
+
+def fast_mode_available(
+    model: str | None,
+    models: list[ModelOption],
+    backend: str | None = None,
+) -> bool:
+    """Let the backend validate its configured default; validate explicit models locally."""
+    if model is None:
+        return True
+    selected = find_model(model, models, backend)
+    return bool(selected and selected.supports_fast_mode)
+
+
+def model_default_effort(selected: ModelOption, efforts: tuple[str, ...]) -> str | None:
+    """The Tag's level for its default model, or the model's own when operators don't offer it."""
+    effort = selected.default_reasoning_effort
+    if effort not in efforts and selected.tag_effort_applied:
+        return selected.model_reasoning_effort
+    return effort
+
+
+def default_agent_settings(models: list[ModelOption]) -> AgentSettings:
+    if not models:
+        return AgentSettings()
+    selected = next((item for item in models if item.is_default), None)
+    if selected is None:
+        return AgentSettings(backend=models[0].backend)
+    efforts = efforts_for_model(selected.model_id, models, selected.backend)
+    effort = model_default_effort(selected, efforts)
+    if effort not in efforts:
+        effort = efforts[0] if efforts else None
+    return AgentSettings(
+        model=selected.model_id,
+        reasoning_effort=effort,
+        fast_mode=selected.default_fast_mode and selected.supports_fast_mode,
+        backend=selected.backend,
+    )
+
+
 def discover_tag_models(default_backend: str) -> list[ModelOption]:
     """Combine every usable backend's catalog and mark the Tag's default model.
 
