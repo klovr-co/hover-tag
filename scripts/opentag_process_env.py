@@ -115,9 +115,13 @@ def with_channel_scopes(scopes: str, conversation_id: str, source: Mapping[str, 
 
 
 def isolated_environment(source: Mapping[str, str], *, transport: str) -> dict[str, str]:
-    if transport != "slack":
-        raise ValueError("transport must be slack")
-    return dict(source)
+    if transport == "slack":
+        return dict(source)
+    if transport == "local":
+        # A local run (tag run) has no Slack conversation, so it gets no Slack access at all.
+        return {key: value for key, value in source.items()
+                if not key.startswith("SLACK_") and key != "MFS_SLACK_TOKEN"}
+    raise ValueError("transport must be slack or local")
 
 
 def backend_environment(

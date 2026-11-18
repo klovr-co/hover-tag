@@ -42,6 +42,8 @@ describe("Tag detail", () => {
     expect(screen.getByRole("tooltip").textContent).toContain("Cached input read");
     expect(screen.queryByText(/Connected to Slack|Memory ready/)).toBeNull();
     expect(activityText({ at: "", kind: "failed", channel: "D1", channel_name: null, dm: true })).toBe("Couldn't finish a request in a direct message");
+    expect(activityText({ at: "", kind: "stopped", channel: "", channel_name: null, dm: false, trigger: { type: "run" } }))
+      .toBe("Stopped a request in an app or script");
   });
 
   it("lists the workspace's Tags and channels, and a channel shows its Tags", async () => {

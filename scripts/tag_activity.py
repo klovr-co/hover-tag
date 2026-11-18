@@ -36,8 +36,9 @@ except ImportError:  # Direct script execution does not create a package context
 SCHEMA_VERSION = 1
 RETENTION_SECONDS = 30 * 24 * 60 * 60
 MAX_RECORDS = 200
-# Routine runs keep their own, smaller budget so they never push out people's requests.
+# Routine runs and `tag run` runs keep their own, smaller budgets so they never push out people's requests.
 MAX_ROUTINE_RECORDS = 50
+MAX_RUN_RECORDS = 50
 MAX_EVENTS = 60
 MAX_REPLY_PREVIEW = 220
 ACTIVITY_DETAIL_ACTION_ID = "opentag_activity_detail"
@@ -101,8 +102,10 @@ def _public_labels() -> frozenset[str]:
 PUBLIC_LABELS = _public_labels()
 
 
-def routine_trigger(value: object) -> dict[str, str] | None:
-    """The routine that started a run, or None for a person's request."""
+def activity_trigger(value: object) -> dict[str, str] | None:
+    """What started a run: a routine, `tag run`, or None for a person's request in Slack."""
+    if isinstance(value, dict) and value.get("type") == "run":
+        return {"type": "run"}
     if not isinstance(value, dict) or value.get("type") != "routine":
         return None
     routine_id, name = value.get("routine_id"), value.get("name")
@@ -115,11 +118,24 @@ def routine_trigger(value: object) -> dict[str, str] | None:
             "trigger": kind if kind in {"schedule", "catch-up", "run-now", "retry"} else "schedule"}
 
 
-def _is_routine_record(path: Path) -> bool:
+def _trigger_type(path: Path) -> str | None:
     try:
-        return routine_trigger(json.loads(path.read_text(encoding="utf-8")).get("trigger")) is not None
+        trigger = activity_trigger(json.loads(path.read_text(encoding="utf-8")).get("trigger"))
     except (OSError, ValueError, AttributeError):
-        return False
+        return None
+    return trigger["type"] if trigger else None
+
+
+def activity_step(event: dict[str, Any]) -> tuple[str, str, dict[str, str]] | None:
+    """An activity event's step id, public label and sanitized details, as Activity keeps them."""
+    item_id = event.get("activity_id")
+    if not isinstance(item_id, str) or not item_id or len(item_id) > 200:
+        return None
+    label = event.get("label")
+    if not isinstance(label, str) or label not in PUBLIC_LABELS:
+        label = "Using a connected tool…"
+    return (hashlib.sha256(item_id.encode("utf-8")).hexdigest(), label,
+            sanitize_activity_details(event.get("details")))
 
 
 def _timestamp() -> str:
@@ -157,8 +173,10 @@ class ActivityStore:
     It lists only runs this process started, so a crashed bridge leaves none behind.
     """
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(self, root: Path | None = None, *, publish_live: bool = True) -> None:
         self.root = root or instance_home() / "state/activity"
+        # Only the bridge owns activity-now.json; another process would replace its running list.
+        self.publish_live = publish_live
         self.lock = threading.RLock()
         self.live: dict[str, dict[str, str]] = {}
         self.last: dict[str, str] | None = None
@@ -169,6 +187,8 @@ class ActivityStore:
 
     def publish_now(self) -> None:
         """Replace activity-now.json; a failure never affects the run itself."""
+        if not self.publish_live:
+            return
         with self.lock:
             state = {"schema_version": SCHEMA_VERSION, "updated_at": _timestamp(),
                      "running": sorted(self.live.values(), key=lambda run: run["started_at"]), "last": self.last}
@@ -201,14 +221,14 @@ class ActivityStore:
     def _prune(self) -> None:
         cutoff = time.time() - RETENTION_SECONDS
         files = sorted(self.root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
-        kept = {False: 0, True: 0}
+        limits = {None: MAX_RECORDS, "routine": MAX_ROUTINE_RECORDS, "run": MAX_RUN_RECORDS}
+        kept = dict.fromkeys(limits, 0)
         for path in files:
-            routine = _is_routine_record(path)
-            limit = MAX_ROUTINE_RECORDS if routine else MAX_RECORDS
-            if kept[routine] >= limit or path.stat().st_mtime < cutoff:
+            kind = _trigger_type(path)
+            if kept[kind] >= limits[kind] or path.stat().st_mtime < cutoff:
                 path.unlink(missing_ok=True)
             else:
-                kept[routine] += 1
+                kept[kind] += 1
 
     def create(self, *, team: str, channel: str, thread_ts: str,
                request_ts: str, requester: str, reasoning_effort: str | None = None,
@@ -230,7 +250,7 @@ class ActivityStore:
         }
         if reasoning_effort in SUPPORTED_REASONING_EFFORTS:
             record["reasoning_effort"] = reasoning_effort
-        if (clean := routine_trigger(trigger)) is not None:
+        if (clean := activity_trigger(trigger)) is not None:
             record["trigger"] = clean
         with self.lock:
             self._write(record)
@@ -311,16 +331,9 @@ class ActivityStore:
                         record["usage"] = usage
                         self._write(record)
             return
-        item_id = event.get("activity_id")
-        label = event.get("label")
-        if event_type not in {"activity_start", "activity_complete"}:
+        if event_type not in {"activity_start", "activity_complete"} or (step := activity_step(event)) is None:
             return
-        if not isinstance(item_id, str) or not item_id or len(item_id) > 200:
-            return
-        if not isinstance(label, str) or label not in PUBLIC_LABELS:
-            label = "Using a connected tool…"
-        item_id = hashlib.sha256(item_id.encode("utf-8")).hexdigest()
-        details = sanitize_activity_details(event.get("details"))
+        item_id, label, details = step
         with self.lock:
             record = self.get(run_id)
             if record is None or record["outcome"] != "running":
@@ -533,7 +546,7 @@ def activity_item(record: dict[str, Any], *, names: dict[str, str] | None = None
         **({"step_count": steps} if (steps := len(record["events"]) + record["omitted"]) else {}),
         **({"duration_seconds": duration} if (duration := generation_seconds(record)) is not None else {}),
         **({"reasoning_effort": effort} if (effort := record.get("reasoning_effort")) in SUPPORTED_REASONING_EFFORTS else {}),
-        **({"trigger": trigger} if (trigger := routine_trigger(record.get("trigger"))) else {}),
+        **({"trigger": trigger} if (trigger := activity_trigger(record.get("trigger"))) else {}),
         **({"usage": usage} if (usage := token_usage(record.get("usage"))) is not None else {}),
         **({"artifacts": artifacts} if (artifacts := artifact_records(record.get("artifacts"))) else {}),
         **({"artifact_thread_url": url} if artifacts and (url := artifact_thread_url(record)) else {}),

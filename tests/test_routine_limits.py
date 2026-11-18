@@ -6,7 +6,7 @@ from pathlib import Path
 
 from scripts import claude_agent_backend
 from scripts.opentag_process_env import backend_environment
-from scripts.tag_activity import MAX_RECORDS, MAX_ROUTINE_RECORDS, ActivityStore, recent_activity
+from scripts.tag_activity import MAX_RECORDS, MAX_ROUTINE_RECORDS, MAX_RUN_RECORDS, ActivityStore, recent_activity
 
 
 class ChildEnvironmentTests(unittest.TestCase):
@@ -51,6 +51,15 @@ class RoutineActivityTests(unittest.TestCase):
         self.assertEqual(sum(1 for r in records if "trigger" in r), MAX_ROUTINE_RECORDS)
         self.assertTrue(all(self.store.get(run_id) for run_id in people))
         self.assertGreater(MAX_RECORDS, MAX_ROUTINE_RECORDS)
+
+    def test_runs_from_tag_run_keep_a_budget_apart_from_people_and_routines(self):
+        people = [self.create() for _ in range(5)]
+        routines = [self.create(routine=True) for _ in range(5)]
+        for _ in range(MAX_RUN_RECORDS + 10):
+            self.store.create(team="", channel="", thread_ts="", request_ts="", requester="", trigger={"type": "run"})
+        records = [json.loads(p.read_text(encoding="utf-8")) for p in self.store.root.glob("*.json")]
+        self.assertEqual(sum(1 for r in records if r.get("trigger") == {"type": "run"}), MAX_RUN_RECORDS)
+        self.assertTrue(all(self.store.get(run_id) for run_id in people + routines))
 
     def test_a_routine_run_gets_its_thread_later_and_shows_its_trigger(self):
         run_id = self.create(routine=True)

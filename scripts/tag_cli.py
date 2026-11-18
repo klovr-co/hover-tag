@@ -79,6 +79,7 @@ CAPABILITIES = (
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
     "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "permission-rules", "routines",
+    "run-jsonl",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2027,6 +2028,26 @@ def _routine_command(installation_root: Path, tag_id: str, arguments: list[str])
                                channels=_channels(values, context.home), tag_running=slack_ready)
 
 
+def _run_command(installation_root: Path, tag_id: str, arguments: list[str]) -> int:
+    """tag [TAG] run …: one prompt through the Tag's agent, streamed as JSON lines."""
+    try:
+        import tag_run_cli
+    except ImportError:
+        from scripts import tag_run_cli
+
+    def load() -> tuple[Path, dict[str, str] | None]:
+        selected = tag_instances.resolve_reference(installation_root, tag_id)
+        if selected == tag_instances.DEFAULT_TAG:
+            selected = tag_instances.select_unnamed(installation_root)
+        context = tag_instances.resolve(installation_root, selected)
+        path = context.home / "config/settings.json"
+        if not path.is_file():
+            return context.home, None
+        return context.home, instance_environment(context, read_config(path))
+
+    return tag_run_cli.run(arguments, load=load)
+
+
 def _abandon_command(context: tag_instances.InstanceContext, args) -> int:
     """Set aside a Tag whose setup never reached Slack. It is moved, never deleted."""
     import shutil
@@ -2561,7 +2582,8 @@ def _run_cli() -> int:
         raw_arguments
         and not raw_arguments[0].startswith("-")
         and (raw_arguments[0] not in COMMANDS or (
-            raw_arguments[0] == "usage" and len(raw_arguments) > 1 and raw_arguments[1] in COMMANDS
+            # A Tag created before its name became a command: tag usage status, tag run run.
+            raw_arguments[0] in {"usage", "run"} and len(raw_arguments) > 1 and raw_arguments[1] in COMMANDS
         ))
     )
     tag_id = raw_arguments.pop(0) if explicit_tag else "default"
@@ -2573,6 +2595,8 @@ def _run_cli() -> int:
         if tag_id == tag_instances.DEFAULT_TAG:
             tag_id = tag_instances.select_unnamed(root)
         return _routine_command(root, tag_id, raw_arguments[1:])
+    if raw_arguments[:1] == ["run"]:
+        return _run_command(tag_home(), tag_id, raw_arguments[1:])
     args = parser.parse_args(raw_arguments)
     if args.activity and (args.command != "logs" or args.follow):
         parser.error("--activity requires logs and cannot be combined with --follow")

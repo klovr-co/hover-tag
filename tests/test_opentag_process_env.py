@@ -11,6 +11,19 @@ from scripts.opentag_process_env import (
 
 
 class BackendEnvironmentTests(unittest.TestCase):
+    def test_a_local_run_gets_no_slack_access_or_slack_memory(self) -> None:
+        local = backend_environment({
+            "PATH": "/fixture/bin", "SLACK_BOT_TOKEN": "xoxb-1", "SLACK_USER_TOKEN": "xoxp-1", "SLACK_TEAM_ID": "T1",
+            "MFS_SLACK_TOKEN": "xoxb-2", "MFS_ALLOWED_SCOPES": "slack://tag-t1/channels/team__C1",
+            "MFS_CHANNEL_SCOPES": '{"C1": ["file://archive/whatsapp"]}', "OPENTAG_CLAUDE_PERMISSION_MODE": "auto",
+        }, transport="local", conversation_id="", caller_id="")
+        self.assertFalse([name for name in local if name.startswith("SLACK_")])
+        self.assertEqual(("", "auto", "/fixture/bin"), (local["MFS_ALLOWED_SCOPES"],
+                                                        local["OPENTAG_CLAUDE_PERMISSION_MODE"], local["PATH"]))
+        self.assertNotIn("MFS_SLACK_TOKEN", local)
+        with self.assertRaises(ValueError):
+            backend_environment({}, transport="email", conversation_id="", caller_id="")
+
     def test_telemetry_settings_do_not_reach_any_child_environment(self) -> None:
         source = {
             "PATH": "/fixture/bin",

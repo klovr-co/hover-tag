@@ -24,6 +24,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `rename` | `tag NAME rename "Name" --json` |
 | `describe` | `tag NAME describe "Description" --json`: changes the Slack app's one-line description and verifies Slack saved it; `""` clears it |
 | `routines` | `tag NAME routine list\|show\|runs\|add\|edit\|pause\|resume\|remove\|run-now --json`; see [Routines](#routines) |
+| `run-jsonl` | `tag NAME run --prompt-file FILE\|- [--resume SESSION_ID] [--max-turns N] [--timeout-minutes N] --json`: one prompt through the Tag's agent, streamed as JSON lines; see [Running a prompt](#running-a-prompt) |
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
@@ -648,4 +649,81 @@ its steps with `tag NAME logs --activity RUN --json` using `activity.run_id`
 `error_reference` names a failure's entry in the error report and the logs. Activity rows from `tag NAME logs --json` carry `trigger` with
 `type: "routine"`, `routine_id`, `name`, and `trigger` when a routine started
 the run.
+
+## Running a prompt
+
+`tag NAME run` asks a Tag's agent to do one piece of work and streams what it
+does, so a client can show the work as it happens and continue it later. The
+run uses what the Tag's routines and Slack threads use: its AI connection,
+default model, thinking level, Fast Mode, permission rules and working folder.
+It works whether or not the Tag is running. It has no Slack conversation, so it
+gets no Slack access, posts nothing, and its memory search covers only the
+Tag's folder.
+
+```sh
+tag NAME run --prompt-file prompt.txt --json
+echo "And how many words?" | tag NAME run --prompt-file - --resume SESSION_ID --json
+```
+
+- `--prompt-file FILE|-` (required): the prompt, from a UTF-8 file or
+  standard input.
+- `--resume SESSION_ID`: continue the agent session an earlier run reported.
+  The session keeps its earlier turns, so send only what is new.
+- `--max-turns N`: stop after N agent turns (1–1000). Claude applies it;
+  Codex has no equivalent and ignores it, as for routines.
+- `--timeout-minutes N`: stop after N minutes (1–1440). The default is the
+  Tag's maximum runtime (`OPENTAG_MAX_TIMEOUT_SECONDS`, one hour unless
+  changed).
+- `--json` (required).
+
+The output is one JSON object per line, each with `schema_version: 1`:
+
+- `{"type": "started", "session_id"}` comes first, once the agent reports
+  its Codex thread or Claude session. Pass `session_id` to `--resume` later.
+  When the agent reports it late, as Claude does when resuming, `started`
+  carries the resumed ID; `session_id` is `null` only if neither is known yet.
+- `{"type": "event", "seq", "kind", …}` lines follow as the agent works. `seq`
+  counts from 1. Each `kind` reuses what Activity records for a step (see
+  `tag NAME logs --activity RUN --json`):
+  - `text`: `phase` and `delta`, the next part of the answer. `phase` is
+    `final_answer`; both agents keep the notes they write between tool calls
+    private, as in Slack. Joining the deltas gives the answer.
+  - `thinking`: `id`, `status`, and `text`, the provider's thinking summary,
+    once the step completes and when the Tag shares thinking
+    (`OPENTAG_SHOW_THINKING`).
+  - `tool_use`: `id`, `label`, `status: "running"`, and `details` (`tool`,
+    `input`). `tool_result` has the same `id` and `label`, the final `status`
+    (`completed`, `failed`, `declined`, `interrupted`, or `unknown`), and
+    `details` (`output`). Details are redacted and shortened as in Activity.
+  - `status`: `text`, a short notice such as a retry.
+- `{"type": "result", "status", "session_id", "usage", "model", "run_id",
+  "text", "error"?}` comes last, always: also when the Tag can't be found or
+  read, or the run is stopped before the agent starts. Then it is the only line.
+  `status` is `complete`, `failed`, `cancelled`, or `timeout`. `usage` has the
+  cumulative `input_tokens`, `output_tokens` and `total_tokens` (input
+  includes cached input), or is `null` when the provider reported none.
+  `text` is the final answer. `run_id` names the run's Activity record, or is
+  `null` when the run never started.
+  `error` has `code` (such as `error_max_turns`, or `null`) and `message`
+  when `status` isn't `complete`.
+
+See `run.jsonl` and `run-cancelled.jsonl`. The command exits 0 when the result
+is `complete` and 1 otherwise; argument errors exit 2 before any line is
+printed.
+
+To stop a run, send it SIGTERM or SIGINT. On Windows, press Ctrl+C in its
+console, or start it with `CREATE_NEW_PROCESS_GROUP` and send
+`CTRL_BREAK_EVENT` to that group. The agent stops cleanly, and the last line is still the `result`,
+with `status: "cancelled"`. A second signal stops it at once, with every
+process it started. Nothing the
+agent finished before the stop is rolled back.
+
+Nobody can approve an action during a run, so Tag denies each approval
+request and reports it as a `status` event. Set the Tag's
+[permissions](#ai-connections) to allow what runs need.
+
+Each run is kept in Activity: `tag NAME logs --json` lists it with `trigger:
+{"type": "run"}` and an empty `channel`, and Tag.app shows it as a run from an
+app or script. Tag keeps the latest 50 runs, apart from the records it keeps
+for people's requests and routines.
 
